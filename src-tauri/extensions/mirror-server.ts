@@ -86,6 +86,8 @@ const USER_HOME = process.env.HOME || process.env.USERPROFILE || os.homedir();
 const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(USER_HOME, ".pi", "agent");
 const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(PI_AGENT_DIR, "sessions");
 const INSTANCES_DIR = path.join(USER_HOME, ".pi", "tau-instances");
+const MIRROR_PROTOCOL_VERSION = 2;
+const MIRROR_CAPABILITIES = ["new_session", "switch_session", "session_dir"];
 
 // Instance registry — tracks all running Tau servers
 function registerInstance(port: number, sessionFile: string, cwd: string) {
@@ -215,13 +217,48 @@ function sendAuthRequired(res: http.ServerResponse) {
 }
 
 export default function (pi: ExtensionAPI) {
-  let server: http.Server | null = null;
-  let wss: WebSocketServer | null = null;
-  let heartbeatTimer: NodeJS.Timeout | null = null;
-  const clients = new Set<WebSocket>();
+  const mirrorState = ((globalThis as any).__tauMirrorState ||= {
+    server: null,
+    wss: null,
+    heartbeatTimer: null,
+    clients: new Set<WebSocket>(),
+    mirrorUrl: "",
+    tailscaleUrl: "",
+  }) as {
+    server: http.Server | null;
+    wss: WebSocketServer | null;
+    heartbeatTimer: NodeJS.Timeout | null;
+    clients: Set<WebSocket>;
+    mirrorUrl: string;
+    tailscaleUrl: string;
+  };
+  let server = mirrorState.server;
+  let wss = mirrorState.wss;
+  let heartbeatTimer = mirrorState.heartbeatTimer;
+  const clients = mirrorState.clients;
 
-  // Store latest context reference for use in command handlers
+  // Store latest context reference for use in command handlers. Session resume
+  // can recreate the extension context while the mirror server keeps listening.
   let latestCtx: ExtensionContext | null = null;
+
+  function setLatestCtx(ctx: ExtensionContext) {
+    latestCtx = ctx;
+    (globalThis as any).__tauMirrorLatestCtx = ctx;
+  }
+
+  function getLatestCtx(): ExtensionContext | null {
+    return ((globalThis as any).__tauMirrorLatestCtx as ExtensionContext | null) || latestCtx;
+  }
+
+  function setLatestPi(api: ExtensionAPI) {
+    (globalThis as any).__tauMirrorLatestPi = api;
+  }
+
+  function getLatestPi(): ExtensionAPI {
+    return ((globalThis as any).__tauMirrorLatestPi as ExtensionAPI) || pi;
+  }
+
+  setLatestPi(pi);
 
   // Pending RPC-style requests from browser (id -> resolver)
   const pendingRequests = new Map<string, (response: any) => void>();
@@ -247,8 +284,8 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  let mirrorUrl = "";
-  let tailscaleUrl = "";
+  let mirrorUrl = mirrorState.mirrorUrl;
+  let tailscaleUrl = mirrorState.tailscaleUrl;
 
   // ═══════════════════════════════════════
   // Helper: stop the server
@@ -257,6 +294,7 @@ export default function (pi: ExtensionAPI) {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
+      mirrorState.heartbeatTimer = null;
     }
     if (wss) {
       for (const client of clients) {
@@ -265,14 +303,18 @@ export default function (pi: ExtensionAPI) {
       clients.clear();
       wss.close();
       wss = null;
+      mirrorState.wss = null;
     }
     if (server) {
       server.close();
       server = null;
+      mirrorState.server = null;
     }
     unregisterInstance();
     mirrorUrl = "";
     tailscaleUrl = "";
+    mirrorState.mirrorUrl = "";
+    mirrorState.tailscaleUrl = "";
   }
 
   // ═══════════════════════════════════════
@@ -350,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 
   for (const eventType of eventTypes) {
     pi.on(eventType as any, async (event: any, ctx: ExtensionContext) => {
-      latestCtx = ctx;
+      setLatestCtx(ctx);
 
       // Forward event to all connected browser clients
       // Wrap in { type: "event", event: ... } to match the existing frontend protocol
@@ -365,7 +407,7 @@ export default function (pi: ExtensionAPI) {
   let userMessages: string[] = [];
 
   pi.on("session_start", async (_event, ctx) => {
-    latestCtx = ctx;
+    setLatestCtx(ctx);
     turnCount = 0;
     titleSet = false;
     userMessages = [];
@@ -392,10 +434,11 @@ export default function (pi: ExtensionAPI) {
     if (text) userMessages.push(text.substring(0, 300));
   });
 
-  pi.on("turn_end", async (_event, _ctx) => {
+  pi.on("turn_end", async (_event, ctx) => {
     if (titleSet || turnCount < 2) return;
 
-    const sessionName = pi.getSessionName();
+    const activePi = getLatestPi();
+    const sessionName = ctx.sessionManager.getSessionName();
     if (sessionName && sessionName !== "New Session" && sessionName !== "Untitled") {
       titleSet = true;
       return;
@@ -404,7 +447,7 @@ export default function (pi: ExtensionAPI) {
     // Generate title from collected messages
     const title = generateSessionTitle(userMessages);
     if (title) {
-      pi.setSessionName(title);
+      activePi.setSessionName(title);
       titleSet = true;
       // Broadcast to connected clients
       broadcast({ type: "event", event: { type: "session_name", name: title } });
@@ -468,8 +511,8 @@ export default function (pi: ExtensionAPI) {
 
     // Get model info
     const model = ctx.model;
-    const thinkingLevel = pi.getThinkingLevel();
-    const sessionName = pi.getSessionName();
+    const thinkingLevel = currentThinkingLevel(entries);
+    const sessionName = ctx.sessionManager.getSessionName();
     const sessionFile = ctx.sessionManager.getSessionFile();
 
     // Context usage
@@ -487,12 +530,22 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  function currentThinkingLevel(entries: any[]): string {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i]?.type === "thinking_level_change" && entries[i].thinkingLevel) {
+        return entries[i].thinkingLevel;
+      }
+    }
+    return "off";
+  }
+
   // ═══════════════════════════════════════
   // Handle commands from browser clients
   // ═══════════════════════════════════════
   async function handleCommand(ws: WebSocket, command: any) {
     const id = command.id;
-    const ctx = latestCtx;
+    const ctx = getLatestCtx();
+    const activePi = getLatestPi();
 
     const success = (cmd: string, data?: any) => {
       const resp: any = { type: "response", command: cmd, success: true, id };
@@ -511,9 +564,9 @@ export default function (pi: ExtensionAPI) {
           if (ctx && !ctx.isIdle()) {
             const behavior = command.streamingBehavior || "steer";
             if (behavior === "steer") {
-              pi.sendUserMessage(command.message, { deliverAs: "steer" });
+              activePi.sendUserMessage(command.message, { deliverAs: "steer" });
             } else {
-              pi.sendUserMessage(command.message, { deliverAs: "followUp" });
+              activePi.sendUserMessage(command.message, { deliverAs: "followUp" });
             }
           } else {
             // Build content with optional images
@@ -544,12 +597,12 @@ export default function (pi: ExtensionAPI) {
               // Only send content array if we actually have images, otherwise just text
               const hasImages = content.some((c: any) => c.type === "image");
               if (hasImages) {
-                pi.sendUserMessage(content);
+                activePi.sendUserMessage(content);
               } else {
-                pi.sendUserMessage(command.message);
+                activePi.sendUserMessage(command.message);
               }
             } else {
-              pi.sendUserMessage(command.message);
+              activePi.sendUserMessage(command.message);
             }
           }
           sendTo(ws, success("prompt"));
@@ -557,13 +610,13 @@ export default function (pi: ExtensionAPI) {
         }
 
         case "steer": {
-          pi.sendUserMessage(command.message, { deliverAs: "steer" });
+          activePi.sendUserMessage(command.message, { deliverAs: "steer" });
           sendTo(ws, success("steer"));
           break;
         }
 
         case "follow_up": {
-          pi.sendUserMessage(command.message, { deliverAs: "followUp" });
+          activePi.sendUserMessage(command.message, { deliverAs: "followUp" });
           sendTo(ws, success("follow_up"));
           break;
         }
@@ -581,12 +634,13 @@ export default function (pi: ExtensionAPI) {
             break;
           }
           const model = ctx.model;
+          const entries = ctx.sessionManager.getEntries();
           const state = {
             model,
-            thinkingLevel: pi.getThinkingLevel(),
+            thinkingLevel: currentThinkingLevel(entries),
             isStreaming: !ctx.isIdle(),
             sessionFile: ctx.sessionManager.getSessionFile(),
-            sessionName: pi.getSessionName(),
+            sessionName: ctx.sessionManager.getSessionName(),
             autoCompactionEnabled: true, // Extension can't easily check this
           };
           sendTo(ws, success("get_state", state));
@@ -600,6 +654,14 @@ export default function (pi: ExtensionAPI) {
           }
           const entries = ctx.sessionManager.getEntries();
           sendTo(ws, success("get_messages", { entries }));
+          break;
+        }
+
+        case "get_tau_capabilities": {
+          sendTo(ws, success("get_tau_capabilities", {
+            mirrorProtocolVersion: MIRROR_PROTOCOL_VERSION,
+            capabilities: MIRROR_CAPABILITIES,
+          }));
           break;
         }
 
@@ -628,13 +690,28 @@ export default function (pi: ExtensionAPI) {
             break;
           }
 
-          (ctx.sessionManager as any).setSessionFile(resolved);
-          updateInstanceSession(ctx.sessionManager.getSessionFile() || resolved);
+          let replacementSnapshot: any = null;
+          let replacementSessionFile = resolved;
+          let replacementEntries: any[] = [];
+          const result = await ctx.switchSession(resolved, {
+            withSession: async (newCtx: any) => {
+              setLatestCtx(newCtx);
+              replacementSessionFile = newCtx.sessionManager.getSessionFile() || resolved;
+              replacementEntries = newCtx.sessionManager.getEntries();
+              updateInstanceSession(replacementSessionFile);
+              replacementSnapshot = await buildStateSnapshot(newCtx);
+            },
+          });
+          if (result.cancelled) {
+            sendTo(ws, success("switch_session", { cancelled: true }));
+            break;
+          }
           sendTo(ws, success("switch_session", {
-            sessionFile: ctx.sessionManager.getSessionFile(),
-            entries: ctx.sessionManager.getEntries(),
+            cancelled: false,
+            sessionFile: replacementSessionFile,
+            entries: replacementEntries,
           }));
-          broadcast(await buildStateSnapshot(ctx));
+          if (replacementSnapshot) broadcast(replacementSnapshot);
           break;
         }
 
@@ -661,7 +738,7 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, error("set_model", `Model not found: ${command.provider}/${command.modelId}`));
             break;
           }
-          const ok = await pi.setModel(model);
+          const ok = await activePi.setModel(model);
           if (!ok) {
             sendTo(ws, error("set_model", "No API key for this model"));
             break;
@@ -687,10 +764,10 @@ export default function (pi: ExtensionAPI) {
             (m: any) => m.provider === currentModel.provider && m.id === currentModel.id
           );
           const nextModel = availModels[(idx + 1) % availModels.length];
-          await pi.setModel(nextModel);
+          await activePi.setModel(nextModel);
           sendTo(ws, success("cycle_model", {
             model: nextModel,
-            thinkingLevel: pi.getThinkingLevel(),
+            thinkingLevel: currentThinkingLevel(ctx.sessionManager.getEntries()),
           }));
           break;
         }
@@ -698,22 +775,58 @@ export default function (pi: ExtensionAPI) {
         // ─── Thinking ───
         case "cycle_thinking_level": {
           const levels = ["off", "minimal", "low", "medium", "high"];
-          const current = pi.getThinkingLevel();
+          const current = currentThinkingLevel(ctx?.sessionManager.getEntries?.() || []);
           const idx = levels.indexOf(current);
           const next = levels[(idx + 1) % levels.length];
-          pi.setThinkingLevel(next as any);
-          const actual = pi.getThinkingLevel();
-          sendTo(ws, success("cycle_thinking_level", { level: actual }));
+          activePi.setThinkingLevel(next as any);
+          sendTo(ws, success("cycle_thinking_level", { level: next }));
           break;
         }
 
         case "set_thinking_level": {
-          pi.setThinkingLevel(command.level);
+          activePi.setThinkingLevel(command.level);
           sendTo(ws, success("set_thinking_level"));
           break;
         }
 
         // ─── Session ───
+        case "new_session": {
+          if (!ctx) {
+            sendTo(ws, error("new_session", "No context available"));
+            break;
+          }
+
+          let replacementSnapshot: any = null;
+          let replacementSessionFile = "";
+          let replacementEntries: any[] = [];
+          const options: any = {
+            withSession: async (newCtx: any) => {
+              setLatestCtx(newCtx);
+              replacementSessionFile = newCtx.sessionManager.getSessionFile() || "";
+              replacementEntries = newCtx.sessionManager.getEntries();
+              updateInstanceSession(replacementSessionFile);
+              replacementSnapshot = await buildStateSnapshot(newCtx);
+            },
+          };
+          if (command.parentSession) {
+            options.parentSession = String(command.parentSession);
+          }
+
+          const result = await ctx.newSession(options);
+          if (result.cancelled) {
+            sendTo(ws, success("new_session", { cancelled: true }));
+            break;
+          }
+
+          sendTo(ws, success("new_session", {
+            cancelled: false,
+            sessionFile: replacementSessionFile,
+            entries: replacementEntries,
+          }));
+          if (replacementSnapshot) broadcast(replacementSnapshot);
+          break;
+        }
+
         case "get_session_stats": {
           if (!ctx) {
             sendTo(ws, error("get_session_stats", "No context available"));
@@ -746,7 +859,7 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, error("set_session_name", "Name cannot be empty"));
             break;
           }
-          pi.setSessionName(name);
+          activePi.setSessionName(name);
           sendTo(ws, success("set_session_name"));
           break;
         }
@@ -833,6 +946,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
     } catch (e: any) {
+      console.error(`[Mirror] Command ${command.type || "unknown"} failed:`, e?.stack || e?.message || e);
       sendTo(ws, error(command.type || "unknown", e.message || String(e)));
     }
   }
@@ -928,7 +1042,15 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
 
     if (urlPath === "/api/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", mode: "mirror", mirrorUrl, tailscaleUrl: tailscaleUrl || undefined, platform: process.platform }));
+      res.end(JSON.stringify({
+        status: "ok",
+        mode: "mirror",
+        mirrorUrl,
+        tailscaleUrl: tailscaleUrl || undefined,
+        platform: process.platform,
+        mirrorProtocolVersion: MIRROR_PROTOCOL_VERSION,
+        capabilities: MIRROR_CAPABILITIES,
+      }));
       return;
     }
 
@@ -1028,9 +1150,10 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
         const filesUrl = new URL(`http://localhost${req.url}`);
         const explicitPath = filesUrl.searchParams.get("path");
         let dirPath = explicitPath || process.cwd();
-        if (!explicitPath && latestCtx) {
+        const activeCtx = getLatestCtx();
+        if (!explicitPath && activeCtx) {
           try {
-            const entries = latestCtx.sessionManager.getEntries();
+            const entries = activeCtx.sessionManager.getEntries();
             const sessionEntry = entries.find((e: any) => e.type === "session");
             if (sessionEntry?.cwd) dirPath = sessionEntry.cwd;
           } catch {}
@@ -1573,13 +1696,22 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
   // Start server function (reusable)
   // ═══════════════════════════════════════
   function startServer(ctx: ExtensionContext) {
-    if (server) return; // Already running
+    if (mirrorState.server) {
+      server = mirrorState.server;
+      wss = mirrorState.wss;
+      heartbeatTimer = mirrorState.heartbeatTimer;
+      mirrorUrl = mirrorState.mirrorUrl;
+      tailscaleUrl = mirrorState.tailscaleUrl;
+      return;
+    }
 
     // Clean up zombie instances from killed tmux panes etc.
     cleanupZombieInstances();
 
     server = http.createServer(serveStaticFile);
     wss = new WebSocketServer({ noServer: true });
+    mirrorState.server = server;
+    mirrorState.wss = wss;
 
     server.on("upgrade", (request, socket, head) => {
       if (authEnabled && !checkBasicAuth(request)) {
@@ -1609,9 +1741,12 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
       sendTo(ws, { type: "state", isStreaming: false, mode: "mirror" });
 
       // Immediately send state snapshot
-      if (latestCtx) {
-        buildStateSnapshot(latestCtx).then((snapshot) => {
+      const activeCtx = getLatestCtx();
+      if (activeCtx) {
+        buildStateSnapshot(activeCtx).then((snapshot) => {
           sendTo(ws, snapshot);
+        }).catch((error) => {
+          console.error("[Mirror] Failed to build initial state snapshot:", error);
         });
       }
 
@@ -1653,6 +1788,7 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
         try { client.ping(); } catch {}
       }
     }, 20000);
+    mirrorState.heartbeatTimer = heartbeatTimer;
 
     const tryListen = (port: number, maxAttempts = 10) => {
       server!.listen(port, HOST, () => {
@@ -1730,6 +1866,8 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
 
       mirrorUrl = `http://${localIp}:${port}`;
       tailscaleUrl = tailscaleIp ? `http://${tailscaleIp}:${port}` : "";
+      mirrorState.mirrorUrl = mirrorUrl;
+      mirrorState.tailscaleUrl = tailscaleUrl;
       console.log(`[Mirror] Tau mirror server running on ${mirrorUrl}${tailscaleUrl ? `  •  Tailscale: ${tailscaleUrl}` : ""}`);
       ctx.ui.setStatus("mirror", `Mirror: ${localIp}:${port}${tailscaleIp ? ` • TS: ${tailscaleIp}:${port}` : ""}`);
 
@@ -1747,7 +1885,7 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
   // Auto-start on session begin
   // ═══════════════════════════════════════
   pi.on("session_start", async (_event, ctx) => {
-    latestCtx = ctx;
+    setLatestCtx(ctx);
 
     // Skip mirror startup in subagent child processes
     // (pi-subagents sets PI_SUBAGENT_CHILD=1; child processes loading Tau
@@ -1768,7 +1906,11 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
   // ═══════════════════════════════════════
   // Cleanup on shutdown
   // ═══════════════════════════════════════
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event: any) => {
+    if (event?.reason !== "quit") {
+      console.log(`[Mirror] Keeping server running during session ${event?.reason || "replacement"}`);
+      return;
+    }
     stopServer();
     console.log("[Mirror] Server shut down");
   });

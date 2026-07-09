@@ -698,6 +698,12 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
+.live-tag {
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+}
+
 /* Search results */
 .search-results-header {
   color: var(--accent-text);

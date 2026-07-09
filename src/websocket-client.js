@@ -84,15 +84,18 @@ export class WebSocketClient extends EventTarget {
     await this.ensureTauriListeners();
 
     try {
-      const bridgeUrl = window.tauDesktop?.instancePort &&
-        (this.url?.startsWith('ws://') || this.url?.startsWith('wss://'))
+      const bridgeUrl = (this.url?.startsWith('ws://') || this.url?.startsWith('wss://'))
         ? this.url
         : null;
       await invoke('ws_connect', { request: { url: bridgeUrl } });
     } catch (error) {
       console.error('[WS] Tauri bridge failed:', error);
       this.connectionState = 'closed';
-      if (String(error).includes('No active bundled Pi session')) {
+      if (
+        String(error).includes('No active bundled Pi session') ||
+        String(error).includes('Incompatible Tau mirror')
+      ) {
+        window.tauDesktop?.setInstancePort?.(null);
         this.dispatchEvent(new CustomEvent('needsPiSession'));
         return;
       }

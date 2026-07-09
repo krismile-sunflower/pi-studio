@@ -120,13 +120,19 @@ pub async fn start_pi_process(
 
     if no_folder {
         if let Some(existing) = find_no_folder_instance(&state)? {
-            set_active_instance(&state, existing.clone())?;
-            return Ok(existing);
+            if is_compatible_tau_port(existing.port).await {
+                set_active_instance(&state, existing.clone())?;
+                return Ok(existing);
+            }
+            let _ = stop_pi_inner(state.inner(), Some(existing.pid));
         }
     } else if let Some(path) = request.path.as_deref() {
         if let Some(existing) = find_instance_by_path(&state, path)? {
-            set_active_instance(&state, existing.clone())?;
-            return Ok(existing);
+            if is_compatible_tau_port(existing.port).await {
+                set_active_instance(&state, existing.clone())?;
+                return Ok(existing);
+            }
+            let _ = stop_pi_inner(state.inner(), Some(existing.pid));
         }
     }
 
@@ -147,6 +153,7 @@ pub async fn start_pi_process(
     let pi_command = resolve_pi_command(&app)?;
     let static_dir = normalize_child_path(resolve_static_dir(&app));
     let extension_dir = resolve_extension_dir(&app);
+    let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
 
     let mut command = Command::new(&pi_command.program);
     configure_hidden_process(&mut command);
@@ -157,6 +164,8 @@ pub async fn start_pi_process(
         .arg("rpc")
         .arg("--extension")
         .arg(normalize_child_path(resolve_extension_file(&app)))
+        .arg("--session-dir")
+        .arg(session_dir)
         .arg("--no-approve")
         .env("TAU_MIRROR_PORT", port.to_string())
         .env("TAU_HOST", "127.0.0.1")
@@ -171,7 +180,11 @@ pub async fn start_pi_process(
     }
 
     if let Some(extension_dir) = extension_dir {
-        command.env("TAU_EXTENSION_DIR", normalize_child_path(extension_dir));
+        let extension_dir = normalize_child_path(extension_dir);
+        if let Some(node_path) = extension_node_path(&extension_dir) {
+            command.env("NODE_PATH", node_path);
+        }
+        command.env("TAU_EXTENSION_DIR", extension_dir);
     }
 
     let mut child = command
@@ -188,11 +201,8 @@ pub async fn start_pi_process(
         })?;
 
     if let Some(stdin) = child.stdin.as_mut() {
-        writeln!(
-            stdin,
-            r#"{{"id":"pi-studio-start","type":"new_session"}}"#
-        )
-        .map_err(|err| format!("Failed to initialize Pi RPC session: {err}"))?;
+        writeln!(stdin, r#"{{"id":"pi-studio-start","type":"new_session"}}"#)
+            .map_err(|err| format!("Failed to initialize Pi RPC session: {err}"))?;
     }
 
     let pid = child.id();
@@ -539,10 +549,10 @@ fn hidden_command(program: &Path) -> Command {
     command
 }
 
-fn configure_hidden_process(command: &mut Command) {
+fn configure_hidden_process(_command: &mut Command) {
     #[cfg(windows)]
     {
-        command.creation_flags(CREATE_NO_WINDOW);
+        _command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 
@@ -579,12 +589,52 @@ fn resolve_extension_file(app: &AppHandle) -> PathBuf {
         })
 }
 
+fn extension_node_path(extension_dir: &Path) -> Option<std::ffi::OsString> {
+    let node_modules = extension_dir.join("node_modules");
+    if !node_modules.exists() {
+        return env::var_os("NODE_PATH");
+    }
+
+    let mut paths = vec![node_modules];
+    if let Some(existing) = env::var_os("NODE_PATH") {
+        paths.extend(env::split_paths(&existing));
+    }
+    env::join_paths(paths).ok()
+}
+
 fn pi_log_files(port: u16) -> Option<(Stdio, Stdio)> {
     let dir = dirs::config_dir()?.join("pi-studio").join("logs");
     create_dir_all(&dir).ok()?;
     let stdout = File::create(dir.join(format!("pi-{port}.out.log"))).ok()?;
     let stderr = File::create(dir.join(format!("pi-{port}.err.log"))).ok()?;
     Some((Stdio::from(stdout), Stdio::from(stderr)))
+}
+
+fn pi_session_dir(project_path: &Path) -> Result<PathBuf, String> {
+    let agent_dir = env::var("PI_CODING_AGENT_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".pi").join("agent")))
+        .ok_or_else(|| "Could not resolve Pi agent directory".to_string())?;
+    let resolved_project = project_path
+        .canonicalize()
+        .unwrap_or_else(|_| project_path.to_path_buf());
+    let safe_path = encode_session_dir_name(&resolved_project.display().to_string());
+    let session_dir = agent_dir.join("sessions").join(safe_path);
+    create_dir_all(&session_dir).map_err(|err| err.to_string())?;
+    Ok(session_dir)
+}
+
+fn encode_session_dir_name(path: &str) -> String {
+    let trimmed = path.trim_start_matches(['/', '\\']);
+    let safe = trimmed
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '-',
+            _ => ch,
+        })
+        .collect::<String>();
+    format!("--{safe}--")
 }
 
 async fn wait_for_tau(port: u16) -> bool {
@@ -598,6 +648,32 @@ async fn wait_for_tau(port: u16) -> bool {
         sleep(Duration::from_millis(250)).await;
     }
     false
+}
+
+pub async fn is_compatible_tau_port(port: u16) -> bool {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let Ok(response) = client.get(url).send().await else {
+        return false;
+    };
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
+
+    let version_ok = value
+        .get("mirrorProtocolVersion")
+        .and_then(|value| value.as_u64())
+        .is_some_and(|version| version >= 2);
+    let has_new_session = value
+        .get("capabilities")
+        .and_then(|value| value.as_array())
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.as_str() == Some("new_session"))
+        });
+
+    version_ok && has_new_session
 }
 
 fn timestamp_string() -> String {

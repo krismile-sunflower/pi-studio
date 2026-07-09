@@ -75,6 +75,7 @@ let lastUsage = null; // Full usage object for context visualiser
 let mirrorActiveSessionFile = null; // The live session file path from the TUI
 let selectedSessionFile = null; // Session selected in the sidebar, if any
 let selectedSessionTitle = '';
+let selectedSessionLiveOnly = false;
 let viewingActiveSession = true; // Whether we're viewing the live session or a historical one
 let isMirrorMode = false; // Set when mirror_sync received
 let liveInstances = []; // All running Tau instances [{port, sessionFile, cwd}]
@@ -759,11 +760,8 @@ function renderAttachmentPreviews() {
 let messageQueue = [];
 
 async function sendPromptCommand(cmd) {
-  if (selectedSessionFile && selectedSessionFile !== mirrorActiveSessionFile) {
-    await rpcCommand({ type: 'switch_session', sessionFile: selectedSessionFile }, '正在切换会话...');
-    mirrorActiveSessionFile = selectedSessionFile;
-    viewingActiveSession = true;
-    updateMirrorInputState();
+  if (selectedSessionFile && selectedSessionFile !== mirrorActiveSessionFile && !selectedSessionLiveOnly) {
+    await resumePiSession(selectedSessionFile);
   }
 
   const request = {
@@ -775,6 +773,29 @@ async function sendPromptCommand(cmd) {
     throw new Error('pi-studio WebSocket is not connected yet');
   }
   return { success: true };
+}
+
+async function resumePiSession(sessionFile) {
+  const result = await rpcCommand({ type: 'switch_session', sessionFile }, '正在切换会话...');
+  if (!result?.success || result.data?.cancelled) {
+    throw new Error(result?.error || result?.data?.error || 'Pi 未能恢复该会话');
+  }
+
+  const resumedFile = result.data?.sessionFile || sessionFile;
+  selectedSessionFile = resumedFile;
+  selectedSessionLiveOnly = false;
+  mirrorActiveSessionFile = resumedFile;
+  viewingActiveSession = true;
+  updateMirrorInputState();
+
+  if (Array.isArray(result.data?.entries) && result.data.entries.length > 0) {
+    messageRenderer.clear();
+    renderSessionHistory(result.data.entries);
+  } else {
+    wsClient.send({ type: 'mirror_sync_request' });
+  }
+
+  return result.data;
 }
 
 async function sendMessage() {
@@ -934,7 +955,16 @@ async function rpcCommand(cmd, statusMsg) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cmd),
     });
-    const data = await resp.json();
+    const raw = await resp.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { success: false, error: raw || `HTTP ${resp.status}` };
+    }
+    if (!resp.ok && !data.error) {
+      data.error = `HTTP ${resp.status}`;
+    }
     if (data.success) {
       statusText.textContent = 'Done';
       setTimeout(() => { statusText.textContent = 'Connected'; }, 2000);
@@ -944,8 +974,10 @@ async function rpcCommand(cmd, statusMsg) {
     }
     return data;
   } catch (e) {
+    const message = e?.message || String(e);
     statusText.textContent = 'Error';
     setTimeout(() => { statusText.textContent = 'Connected'; }, 3000);
+    return { success: false, error: message };
   }
 }
 
@@ -1189,20 +1221,10 @@ sidebarOverlay.addEventListener('click', () => {
 
 const newSessionBtn = document.getElementById('new-session-btn');
 newSessionBtn.addEventListener('click', () => {
-  sessionTotalCost = 0;
-  lastInputTokens = 0;
-  updateCostDisplay();
-  updateTokenUsage();
-  state.reset();
-  messageRenderer.clear();
-  toolCardRenderer.clear();
-  messageRenderer.renderWelcome();
-  sidebar.clearActive();
-  selectedSessionFile = null;
-  selectedSessionTitle = '';
-  renderSelectedSessionStrip();
-  viewingActiveSession = true;
-  updateMirrorInputState();
+  newSession().catch((error) => {
+    console.error('[App] Failed to create new session:', error);
+    messageRenderer.renderError(`Failed to create session: ${error.message || error}`);
+  });
 });
 
 refreshSessionsBtn.addEventListener('click', () => {
@@ -1266,9 +1288,39 @@ async function newSession() {
   lastInputTokens = 0;
   updateCostDisplay();
   updateTokenUsage();
-  await switchSession(null);
+
+  if (isMirrorMode || desktopHasActivePiSession) {
+    const result = await rpcCommand({ type: 'new_session' }, '正在创建新会话...');
+    if (!result?.success || result.data?.cancelled) {
+      throw new Error(result?.error || result?.data?.error || 'Pi 未能创建新会话');
+    }
+
+    const sessionFile = result.data?.sessionFile || null;
+    selectedSessionFile = sessionFile;
+    selectedSessionLiveOnly = false;
+    mirrorActiveSessionFile = sessionFile;
+    selectedSessionTitle = '新会话';
+    viewingActiveSession = true;
+
+    state.reset();
+    messageRenderer.clear();
+    toolCardRenderer.clear();
+    const entries = result.data?.entries || [];
+    if (entries.length > 0) {
+      renderSessionHistory(entries);
+    } else {
+      messageRenderer.renderWelcome();
+    }
+    updateMirrorInputState();
+    renderSelectedSessionStrip();
+    wsClient.send({ type: 'mirror_sync_request' });
+    refreshSessionsSoon(300);
+  } else {
+    await switchSession(null);
+    setSelectedSessionState(null, null);
+  }
+
   sidebar.clearActive();
-  setSelectedSessionState(null, null);
   if (isMobile()) {
     sidebarEl.classList.add('collapsed');
     sidebarOverlay.classList.remove('visible');
@@ -1304,7 +1356,8 @@ async function switchSession(sessionFile, session = null, project = null) {
     messageRenderer.clear();
     toolCardRenderer.clear();
 
-    if (sessionFile && session) {
+    const canLoadHistoryFile = sessionFile && session && (!session.live || session.fileExists !== false);
+    if (canLoadHistoryFile) {
       messageRenderer.renderSystemMessage('正在加载会话...');
 
       const dirName = project?.dirName;
@@ -1338,6 +1391,8 @@ async function switchSession(sessionFile, session = null, project = null) {
         messageRenderer.clear();
         messageRenderer.renderError('会话加载失败：缺少会话文件路径。');
       }
+    } else if (sessionFile && session?.live) {
+      messageRenderer.renderWelcome();
     } else {
       messageRenderer.renderWelcome();
     }
@@ -1351,6 +1406,7 @@ async function switchSession(sessionFile, session = null, project = null) {
         const protocol = document.location.protocol === 'https:' ? 'wss:' : 'ws:'
         const newUrl = `${protocol}//${location.hostname}:${otherInstance.port}/ws`;
         console.log(`[App] Switching to instance on port ${otherInstance.port}`);
+        window.tauDesktop?.setInstancePort?.(otherInstance.port);
         wsClient.disconnect();
         wsClient.url = newUrl;
         wsClient.forceReconnect();
@@ -1364,17 +1420,21 @@ async function switchSession(sessionFile, session = null, project = null) {
       viewingActiveSession = sessionFile === mirrorActiveSessionFile;
       updateMirrorInputState();
 
+      if (session?.live && session.fileExists === false) {
+        mirrorActiveSessionFile = sessionFile;
+        selectedSessionFile = sessionFile;
+        selectedSessionLiveOnly = true;
+        viewingActiveSession = true;
+        updateMirrorInputState();
+        wsClient.send({ type: 'mirror_sync_request' });
+        return;
+      }
+
       if (viewingActiveSession) {
         // Re-request live state from the extension
         wsClient.send({ type: 'mirror_sync_request' });
       } else if (sessionFile) {
-        const result = await rpcCommand({ type: 'switch_session', sessionFile }, '正在切换会话...');
-        if (result?.success) {
-          mirrorActiveSessionFile = sessionFile;
-          viewingActiveSession = true;
-          updateMirrorInputState();
-          wsClient.send({ type: 'mirror_sync_request' });
-        }
+        await resumePiSession(sessionFile);
       }
     } else {
       const res = await fetch('/api/sessions/switch', {
@@ -1390,7 +1450,7 @@ async function switchSession(sessionFile, session = null, project = null) {
     }
   } catch (error) {
     console.error('[App] Failed to switch session:', error);
-    messageRenderer.renderError('Failed to switch session');
+    messageRenderer.renderError(`Failed to switch session: ${error.message || error}`);
   }
 }
 
@@ -1405,6 +1465,7 @@ function handleMirrorSync(data) {
   // Track the active session
   mirrorActiveSessionFile = data.sessionFile || null;
   selectedSessionFile = selectedSessionFile || mirrorActiveSessionFile;
+  if (selectedSessionFile === mirrorActiveSessionFile) selectedSessionLiveOnly = false;
   viewingActiveSession = !selectedSessionFile || selectedSessionFile === mirrorActiveSessionFile;
   updateMirrorInputState();
   updateMirrorLiveIndicator();
@@ -1724,6 +1785,7 @@ function setWorkspaceState({ path = '', noFolder = false } = {}) {
 
 function setSelectedSessionState(session, project) {
   selectedSessionFile = session?.filePath || null;
+  selectedSessionLiveOnly = Boolean(session?.live && session.fileExists === false);
   selectedSessionTitle = session
     ? (session.name || session.firstMessage || session.file || '当前会话')
     : '';
@@ -1759,6 +1821,7 @@ function setWorkspaceFromInstance(instance) {
 function updateWsUrlFromInstance(instance) {
   const port = instance?.port;
   if (!port) return;
+  window.tauDesktop?.setInstancePort?.(port);
   const nextUrl = `ws://127.0.0.1:${port}/ws`;
   if (wsClient.url === nextUrl) return;
 

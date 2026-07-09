@@ -261,11 +261,7 @@ fn system_pi_package_roots() -> Vec<PathBuf> {
     }
 
     if let Some(global_root) = npm_global_root() {
-        roots.push(
-            global_root
-                .join("@earendil-works")
-                .join("pi-coding-agent"),
-        );
+        roots.push(global_root.join("@earendil-works").join("pi-coding-agent"));
     }
 
     let mut seen = HashSet::new();
@@ -379,7 +375,11 @@ fn scan_catalog_root(
                 "file".to_string(),
             )
         } else if path.is_dir() && path.join("index.ts").is_file() {
-            (file_name.clone(), file_name.clone(), "directory".to_string())
+            (
+                file_name.clone(),
+                file_name.clone(),
+                "directory".to_string(),
+            )
         } else {
             continue;
         };
@@ -436,7 +436,11 @@ fn scan_installed_extensions(install_dir: &Path) -> Result<Vec<PiExtensionInfo>,
                 "file".to_string(),
             )
         } else if path.is_dir() && path.join("index.ts").is_file() {
-            (file_name.clone(), file_name.clone(), "directory".to_string())
+            (
+                file_name.clone(),
+                file_name.clone(),
+                "directory".to_string(),
+            )
         } else {
             continue;
         };
@@ -485,10 +489,7 @@ fn read_catalog_metadata(root: &Path) -> HashMap<String, (String, String)> {
             continue;
         }
 
-        let id = cells[0]
-            .trim_matches('`')
-            .trim_end_matches('/')
-            .to_string();
+        let id = cells[0].trim_matches('`').trim_end_matches('/').to_string();
         if id.is_empty() || id == "Extension" {
             continue;
         }

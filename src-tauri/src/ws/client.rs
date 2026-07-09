@@ -5,7 +5,7 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::commands::sidecar::{active_ws_url, lock_err};
+use crate::commands::sidecar::{active_ws_url, is_compatible_tau_port, lock_err};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +31,13 @@ pub async fn ws_connect(
             "No active bundled Pi session. Open Projects and start a project first.".to_string()
         })?,
     };
+    if let Some(port) = ws_port(&url) {
+        if !is_compatible_tau_port(port).await {
+            return Err(format!(
+                "Incompatible Tau mirror at port {port}. Start a new bundled Pi session."
+            ));
+        }
+    }
     let (stream, _) = tokio_tungstenite::connect_async(&url)
         .await
         .map_err(|err| format!("Failed to connect pi-studio WebSocket at {url}: {err}"))?;
@@ -76,6 +83,10 @@ pub async fn ws_connect(
     });
 
     Ok(())
+}
+
+fn ws_port(url: &str) -> Option<u16> {
+    url::Url::parse(url).ok()?.port()
 }
 
 fn maybe_notify_agent_end(app: &AppHandle, text: &str) {

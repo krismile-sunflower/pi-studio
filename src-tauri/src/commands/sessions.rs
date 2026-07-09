@@ -127,12 +127,168 @@ fn sessions_list() -> Result<Value, String> {
         }
     }
 
+    merge_live_sessions(&mut projects);
+
     projects.sort_by(|a, b| {
         b["sessions"][0]["mtime"]
             .as_u64()
             .cmp(&a["sessions"][0]["mtime"].as_u64())
     });
     Ok(json!({ "projects": projects }))
+}
+
+fn merge_live_sessions(projects: &mut Vec<Value>) {
+    for live in live_tau_instances() {
+        let session_file = live
+            .get("sessionFile")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if session_file.is_empty() {
+            continue;
+        }
+
+        let file_path = PathBuf::from(session_file);
+        let dir_name = file_path
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                live.get("cwd")
+                    .and_then(|value| value.as_str())
+                    .map(encode_project_dir)
+                    .unwrap_or_else(|| "live".to_string())
+            });
+        let project_path = live
+            .get("cwd")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| decode_project_dir(&dir_name));
+        let started_at = live
+            .get("startedAt")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let file_exists = file_path.exists();
+        let file_name = file_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let session = json!({
+            "file": file_name,
+            "filePath": session_file,
+            "mtime": session_mtime(&file_path).unwrap_or_else(now_millis),
+            "id": live.get("pid").and_then(|value| value.as_u64()).map(|pid| format!("live-{pid}")).unwrap_or_else(|| "live".to_string()),
+            "timestamp": started_at,
+            "name": "当前会话",
+            "firstMessage": null,
+            "cwd": project_path,
+            "live": true,
+            "fileExists": file_exists,
+            "port": live.get("port").cloned().unwrap_or(Value::Null),
+            "pid": live.get("pid").cloned().unwrap_or(Value::Null)
+        });
+
+        if let Some(project) = projects
+            .iter_mut()
+            .find(|project| project["dirName"].as_str() == Some(dir_name.as_str()))
+        {
+            if let Some(sessions) = project["sessions"].as_array_mut() {
+                if let Some(existing) = sessions
+                    .iter_mut()
+                    .find(|item| item["filePath"].as_str() == Some(session_file))
+                {
+                    if let Some(map) = existing.as_object_mut() {
+                        if let Some(live_map) = session.as_object() {
+                            for (key, value) in live_map {
+                                map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                } else {
+                    sessions.push(session);
+                    sessions.sort_by(|a, b| b["mtime"].as_u64().cmp(&a["mtime"].as_u64()));
+                }
+            }
+        } else {
+            projects.push(json!({
+                "path": project_path,
+                "dirName": dir_name,
+                "sessions": [session]
+            }));
+        }
+    }
+}
+
+pub fn live_tau_instances() -> Vec<Value> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let dir = home.join(".pi").join("tau-instances");
+    let Ok(files) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    files
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|entry| {
+            let path = entry.path();
+            let raw = fs::read_to_string(&path).ok()?;
+            let value = serde_json::from_str::<Value>(&raw).ok()?;
+            let pid = value.get("pid").and_then(|value| value.as_u64())?;
+            if process_is_alive(pid) {
+                Some(value)
+            } else {
+                let _ = fs::remove_file(path);
+                None
+            }
+        })
+        .collect()
+}
+
+fn process_is_alive(pid: u64) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}")])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
+}
+
+fn session_mtime(path: &Path) -> Option<u64> {
+    path.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 struct SessionSummary {
@@ -298,4 +454,12 @@ fn decode_project_dir(dir_name: &str) -> String {
         .trim_start_matches("--")
         .trim_end_matches("--")
         .replace('-', "/")
+}
+
+fn encode_project_dir(path: &str) -> String {
+    format!(
+        "--{}--",
+        path.trim_start_matches(['/', '\\'])
+            .replace(['/', '\\', ':'], "-")
+    )
 }

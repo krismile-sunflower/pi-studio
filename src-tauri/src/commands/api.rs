@@ -6,9 +6,12 @@ use tauri::{AppHandle, State};
 use url::Url;
 
 use crate::commands::files::{list_files_inner, open_path};
-use crate::commands::sessions::{delete_session, empty_sessions, search_sessions, session_file};
+use crate::commands::sessions::{
+    delete_session, empty_sessions, live_tau_instances, search_sessions, session_file,
+};
 use crate::commands::sidecar::{
-    active_instance_for_port, base_url_for_port, lock_err, start_pi_process, StartPiRequest,
+    active_instance_for_port, base_url_for_port, is_compatible_tau_port, lock_err,
+    start_pi_process, StartPiRequest,
 };
 use crate::settings;
 use crate::AppState;
@@ -40,17 +43,19 @@ pub async fn api_request(
         return local_response(app, state, request).await;
     }
 
-    if has_proxy_target(&state, request.instance_port) {
-        if let Ok(response) = proxy_to_tau(&state, &request).await {
-            return Ok(response);
+    if let Some(port) = proxy_port(&state, request.instance_port) {
+        if is_compatible_tau_port(port).await {
+            if let Ok(response) = proxy_to_tau(&state, &request).await {
+                return Ok(response);
+            }
         }
     }
 
     local_response(app, state, request).await
 }
 
-fn has_proxy_target(state: &State<'_, AppState>, instance_port: Option<u16>) -> bool {
-    active_instance_for_port(state, instance_port).is_some()
+fn proxy_port(state: &State<'_, AppState>, instance_port: Option<u16>) -> Option<u16> {
+    active_instance_for_port(state, instance_port).map(|instance| instance.port)
 }
 
 fn is_desktop_local_path(path: &str) -> bool {
@@ -191,7 +196,7 @@ async fn local_response(
             json!({ "projects": projects, "noFolderActive": no_folder_active })
         }
         ("GET", "/api/instances") => {
-            let instances: Vec<_> = settings::load_runtime_instances()
+            let mut instances: Vec<serde_json::Value> = settings::load_runtime_instances()
                 .into_iter()
                 .filter(|instance| {
                     state
@@ -200,7 +205,54 @@ async fn local_response(
                         .map(|children| children.contains_key(&instance.pid))
                         .unwrap_or(false)
                 })
+                .filter_map(|instance| serde_json::to_value(instance).ok())
                 .collect();
+
+            for live in live_tau_instances() {
+                let Some(port) = live.get("port").and_then(|value| value.as_u64()) else {
+                    continue;
+                };
+                if !is_compatible_tau_port(port as u16).await {
+                    continue;
+                }
+
+                if instances.iter().any(|instance| {
+                    instance.get("port").and_then(|value| value.as_u64()) == Some(port)
+                }) {
+                    if let Some(existing) = instances.iter_mut().find(|instance| {
+                        instance.get("port").and_then(|value| value.as_u64()) == Some(port)
+                    }) {
+                        if let Some(map) = existing.as_object_mut() {
+                            if let Some(live_map) = live.as_object() {
+                                for (key, value) in live_map {
+                                    map.insert(key.clone(), value.clone());
+                                }
+                            }
+                            if let Some(cwd) = live
+                                .get("cwd")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                            {
+                                map.insert("projectPath".into(), json!(cwd));
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                let mut live = live;
+                if let Some(map) = live.as_object_mut() {
+                    if let Some(cwd) = map
+                        .get("cwd")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                    {
+                        map.insert("projectPath".into(), json!(cwd));
+                    }
+                }
+                instances.push(live);
+            }
+
             json!({ "instances": instances })
         }
         ("GET", "/api/sessions") => empty_sessions(),

@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "vite build",
+    "dev:desktop": "npm run install:extensions && npm run dev",
+    "build:desktop": "npm run install:extensions && npm run build",
+    "install:extensions": "npm --prefix src-tauri/extensions install --omit=dev",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

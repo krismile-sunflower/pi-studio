@@ -2,13 +2,17 @@ import { invoke } from '@tauri-apps/api/core';
 
 const isTauri = Boolean(window.__TAURI_INTERNALS__);
 const urlParams = new URLSearchParams(window.location.search);
-const instancePort = urlParams.get('tauPort') ? Number(urlParams.get('tauPort')) : null;
+let instancePort = urlParams.get('tauPort') ? Number(urlParams.get('tauPort')) : null;
 
 window.tauDesktop = {
   isTauri,
   invoke: isTauri ? invoke : null,
   instancePort,
   useNativeWebSocket: true,
+  setInstancePort(port) {
+    instancePort = port ? Number(port) : null;
+    this.instancePort = instancePort;
+  },
 };
 
 function headersToObject(headers = {}) {
@@ -45,7 +49,7 @@ if (isTauri) {
         method,
         body: await bodyToText(init.body),
         headers: headersToObject(init.headers),
-        instancePort,
+        instancePort: window.tauDesktop.instancePort || instancePort,
       },
     });
 

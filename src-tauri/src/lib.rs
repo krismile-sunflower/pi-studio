@@ -51,8 +51,7 @@ pub fn run() {
                     match shortcut.into_string().as_str() {
                         "Ctrl+Alt+T" => tray::toggle_window(app),
                         "Ctrl+Alt+N" => {
-                            let _ =
-                                tauri::Emitter::emit(app, "pi-studio-command", "show-launcher");
+                            let _ = tauri::Emitter::emit(app, "pi-studio-command", "show-launcher");
                             tray::show_window(app);
                         }
                         _ => {}

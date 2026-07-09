@@ -6,7 +6,9 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::settings::{self, DesktopSettings};
 use crate::{
-    commands::sidecar::{lock_err, start_pi_process, StartPiRequest},
+    commands::sidecar::{
+        is_compatible_tau_port, lock_err, start_pi_process, stop_pi_by_state, StartPiRequest,
+    },
     AppState, PiInstance,
 };
 
@@ -39,20 +41,27 @@ pub async fn ensure_default_pi_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PiInstance, String> {
-    if let Some(instance) = state
-        .active_instance
-        .lock()
-        .map_err(lock_err)?
-        .as_ref()
-        .cloned()
-    {
-        let is_running = state
-            .pi_children
+    let active_instance = {
+        state
+            .active_instance
             .lock()
             .map_err(lock_err)?
-            .contains_key(&instance.pid);
-        if is_running {
+            .as_ref()
+            .cloned()
+    };
+    if let Some(instance) = active_instance {
+        let is_running = {
+            state
+                .pi_children
+                .lock()
+                .map_err(lock_err)?
+                .contains_key(&instance.pid)
+        };
+        if is_running && is_compatible_tau_port(instance.port).await {
             return Ok(instance);
+        }
+        if is_running {
+            let _ = stop_pi_by_state(&state, Some(instance.pid));
         }
     }
 

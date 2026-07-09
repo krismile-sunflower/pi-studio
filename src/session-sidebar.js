@@ -413,12 +413,14 @@ export class SessionSidebar {
     const title = session.name || session.firstMessage || '空会话';
     const time = this.formatTime(session.timestamp);
     const tmuxTag = session.tmux ? '<span class="session-tag tmux-tag">tmux</span>' : '';
+    const liveTag = session.live ? '<span class="session-tag live-tag">live</span>' : '';
     const favIcon = this.isFavourite(session.filePath) ? '<span class="session-fav-icon">*</span>' : '';
 
     item.innerHTML = `
       <div class="session-title-row">
         ${favIcon}
         <div class="session-title" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</div>
+        ${liveTag}
         ${tmuxTag}
       </div>
       <div class="session-meta">${time}</div>
