@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+src-tauri/extensions/node_modules/
+
+# Frontend build output
+dist/
+
+# Rust/Tauri build output
+target/
+src-tauri/target/
+src-tauri/target-*/
+src-tauri/gen/
+
+# Vendored local Pi runtime copied by vendor scripts
+src-tauri/binaries/*
+!src-tauri/binaries/README.md
+
+# Logs and local runtime output
+*.log
+*.pid
+vite-dev.log
+vite-dev.err.log
+
+# Environment and local editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
