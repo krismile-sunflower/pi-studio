@@ -154,6 +154,12 @@ exec "$DIR/node" "$DIR/pi-package/dist/cli.js" "$@"
 EOF
 chmod +x "$OUT_DIR/pi"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  xattr -dr com.apple.quarantine "$OUT_DIR" 2>/dev/null || true
+fi
+
+"$OUT_DIR/node" "$OUT_DIR/pi-package/dist/cli.js" --version >/dev/null
+
 echo "Vendored Pi sidecar to $OUT_DIR"
 echo "Node: $OUT_DIR/node"
 echo "Pi package: $OUT_DIR/pi-package"

@@ -1238,9 +1238,22 @@ body {
   color: var(--text-dim);
 }
 
+.thinking-tag.unsupported,
+.thinking-tag:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
 .thinking-tag:hover {
   background: var(--bg-glass-hover);
   border-color: var(--border-hover);
+}
+
+.thinking-tag:disabled:hover {
+  background: var(--bg-glass);
+  border-color: var(--border);
 }
 
 /* Status */
@@ -1454,6 +1467,16 @@ body {
 .settings-value-btn:hover {
   background: var(--bg-glass-hover);
   border-color: var(--border-hover);
+}
+
+.settings-value-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-value-btn:disabled:hover {
+  background: var(--bg-glass);
+  border-color: var(--border);
 }
 
 .settings-value {
@@ -3855,6 +3878,26 @@ body.hide-thinking .thinking-block { display: none !important; }
 
 .launcher-action:hover {
   border-color: var(--accent);
+  background: var(--bg-glass-hover);
+}
+
+.launcher-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.launcher-close:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
   background: var(--bg-glass-hover);
 }
 

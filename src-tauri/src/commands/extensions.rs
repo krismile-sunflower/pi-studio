@@ -6,6 +6,12 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiExtensionInfo {
@@ -282,9 +288,9 @@ fn system_pi_package_roots() -> Vec<PathBuf> {
 fn locate_pi_commands() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let output = if cfg!(windows) {
-        Command::new("where.exe").arg("pi").output()
+        hidden_command("where.exe").arg("pi").output()
     } else {
-        Command::new("which").arg("pi").output()
+        hidden_command("which").arg("pi").output()
     };
 
     let Ok(output) = output else {
@@ -339,7 +345,7 @@ fn add_package_root_from_command_path(roots: &mut Vec<PathBuf>, command_path: Pa
 }
 
 fn npm_global_root() -> Option<PathBuf> {
-    let output = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+    let output = hidden_command(if cfg!(windows) { "npm.cmd" } else { "npm" })
         .args(["root", "-g"])
         .output()
         .ok()?;
@@ -549,7 +555,7 @@ fn install_extension_dependencies(extension_dir: &Path) -> Result<String, String
         return Ok("already installed".into());
     }
 
-    let output = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
+    let output = hidden_command(if cfg!(windows) { "npm.cmd" } else { "npm" })
         .arg("install")
         .arg("--omit=dev")
         .current_dir(extension_dir)
@@ -572,6 +578,15 @@ fn user_extensions_dir() -> Result<PathBuf, String> {
     dirs::home_dir()
         .map(|home| home.join(".pi").join("agent").join("extensions"))
         .ok_or_else(|| "Could not resolve the user home directory for Pi extensions".to_string())
+}
+
+fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 fn platform_binaries_dir() -> Result<&'static str, String> {

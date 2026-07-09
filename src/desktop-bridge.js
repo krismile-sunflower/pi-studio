@@ -3,15 +3,30 @@ import { invoke } from '@tauri-apps/api/core';
 const isTauri = Boolean(window.__TAURI_INTERNALS__);
 const urlParams = new URLSearchParams(window.location.search);
 let instancePort = urlParams.get('tauPort') ? Number(urlParams.get('tauPort')) : null;
+let instanceId = urlParams.get('piPid') ? Number(urlParams.get('piPid')) : null;
+let transport = urlParams.get('transport') || (instancePort ? 'mirror' : 'rpc');
 
 window.tauDesktop = {
   isTauri,
   invoke: isTauri ? invoke : null,
   instancePort,
-  useNativeWebSocket: true,
+  instanceId,
+  transport,
+  useNativeWebSocket: transport === 'mirror',
   setInstancePort(port) {
     instancePort = port ? Number(port) : null;
     this.instancePort = instancePort;
+    if (instancePort) this.setTransport('mirror');
+  },
+  setInstanceId(pid) {
+    instanceId = pid ? Number(pid) : null;
+    this.instanceId = instanceId;
+    if (instanceId) this.setTransport('rpc');
+  },
+  setTransport(nextTransport) {
+    transport = nextTransport || 'rpc';
+    this.transport = transport;
+    this.useNativeWebSocket = transport === 'mirror';
   },
 };
 
@@ -50,6 +65,7 @@ if (isTauri) {
         body: await bodyToText(init.body),
         headers: headersToObject(init.headers),
         instancePort: window.tauDesktop.instancePort || instancePort,
+        instanceId: window.tauDesktop.instanceId || instanceId,
       },
     });
 

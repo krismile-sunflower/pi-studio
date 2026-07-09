@@ -17,9 +17,13 @@ import { listen } from '@tauri-apps/api/event';
 
 // Initialize components
 const desktopPort = window.tauDesktop?.instancePort;
-const wsUrl = desktopPort
+const desktopInstanceId = window.tauDesktop?.instanceId;
+const desktopTransport = window.tauDesktop?.transport || (desktopPort ? 'mirror' : 'rpc');
+const wsUrl = desktopTransport === 'mirror' && desktopPort
   ? `ws://127.0.0.1:${desktopPort}/ws`
-  : (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+  : desktopTransport === 'mirror'
+    ? (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws'
+    : 'pi-rpc://desktop';
 const wsClient = new WebSocketClient(wsUrl);
 const isDesktop = Boolean(window.tauDesktop?.isTauri);
 const state = new StateManager();
@@ -78,8 +82,8 @@ let selectedSessionTitle = '';
 let selectedSessionLiveOnly = false;
 let viewingActiveSession = true; // Whether we're viewing the live session or a historical one
 let isMirrorMode = false; // Set when mirror_sync received
-let liveInstances = []; // All running Tau instances [{port, sessionFile, cwd}]
-let desktopHasActivePiSession = Boolean(desktopPort);
+let liveInstances = []; // Running Pi instances [{pid, transport, port?, sessionFile?, cwd?}]
+let desktopHasActivePiSession = Boolean(desktopInstanceId || desktopPort);
 let sessionRefreshTimer = null;
 let currentWorkspace = { path: '', noFolder: false };
 
@@ -209,7 +213,8 @@ wsClient.addEventListener('connected', () => {
   updateConnectionStatus('connected');
   refreshWorkspaceFromHealth();
   refreshSessionsSoon(300);
-  // Fetch model context window size for token % display
+  fetchModelInfo();
+  // Fetch model context window size again after Pi has emitted its initial snapshot.
   setTimeout(fetchContextWindow, 1000);
 
 });
@@ -1015,12 +1020,27 @@ const modelDropdownLabel = document.getElementById('model-dropdown-label');
 const modelDropdownMenu = document.getElementById('model-dropdown-menu');
 const thinkingBtn = document.getElementById('thinking-btn');
 function updateThinkingBtn() {
-  thinkingBtn.textContent = currentThinkingLevel;
-  thinkingBtn.classList.toggle('off', currentThinkingLevel === 'off');
+  const label = thinkingLevelSupported ? `think ${currentThinkingLevel}` : 'think n/a';
+  thinkingBtn.textContent = label;
+  thinkingBtn.classList.toggle('off', currentThinkingLevel === 'off' || !thinkingLevelSupported);
+  thinkingBtn.classList.toggle('unsupported', !thinkingLevelSupported);
+  thinkingBtn.disabled = !thinkingLevelSupported;
+  thinkingBtn.title = thinkingLevelSupported
+    ? 'Thinking level for new replies. Use Settings > Show thinking to hide reasoning blocks.'
+    : 'This model does not expose Pi thinking levels. Use Settings > Show thinking to hide reasoning blocks.';
+
+  const settingsThinkingBtn = document.getElementById('btn-thinking-level');
+  if (settingsThinkingBtn) {
+    settingsThinkingBtn.textContent = thinkingLevelSupported ? currentThinkingLevel : 'n/a';
+    settingsThinkingBtn.disabled = !thinkingLevelSupported;
+    settingsThinkingBtn.title = thinkingBtn.title;
+  }
 }
 let currentModelId = '';
 let availableModels = [];
 let currentThinkingLevel = 'off';
+let thinkingLevelSupported = true;
+let modelInfoLoaded = false;
 
 async function fetchModelInfo() {
   try {
@@ -1034,28 +1054,63 @@ async function fetchModelInfo() {
     if (modelsData.success && modelsData.data?.models) {
       availableModels = modelsData.data.models;
     }
-    if (stateData.success && stateData.data?.model) {
-      currentModelId = stateData.data.model.id || '';
+    if (stateData.success) {
+      modelInfoLoaded = true;
+      const nextModelId = modelIdFromValue(stateData.data?.model);
+      currentModelId = nextModelId || '';
       updateModelLabel();
 
-      const model = availableModels.find(m => m.id === currentModelId);
-      if (model?.contextWindow) {
-        contextWindowSize = model.contextWindow;
+      const model = modelFromStateOrList(stateData.data?.model);
+      thinkingLevelSupported = modelSupportsThinkingLevel(model);
+      const contextWindow = model?.contextWindow || model?.context_window;
+      if (contextWindow) {
+        contextWindowSize = contextWindow;
         updateTokenUsage();
       }
     }
-    if (stateData.success && stateData.data?.thinkingLevel) {
-      currentThinkingLevel = stateData.data.thinkingLevel;
+    if (stateData.success) {
+      currentThinkingLevel = stateData.data?.thinkingLevel || currentThinkingLevel || 'off';
       updateThinkingBtn();
     }
   } catch (e) {
-    // ignore
+    console.warn('[Model] Failed to fetch model info:', e);
   }
+}
+
+function modelIdFromValue(model) {
+  if (!model) return '';
+  if (typeof model === 'string') return model;
+  return model.id || model.modelId || model.name || '';
+}
+
+function modelFromStateOrList(model) {
+  const modelId = modelIdFromValue(model);
+  if (model && typeof model === 'object' && (model.contextWindow || model.context_window)) return model;
+  return availableModels.find(m => m.id === modelId || m.modelId === modelId) || null;
+}
+
+function modelSupportsThinkingLevel(model) {
+  if (!model || typeof model !== 'object') return true;
+  return Boolean(model.reasoning || model.thinkingLevelMap);
+}
+
+function applyThinkingLevelResponse(data) {
+  if (!data?.success) return false;
+  const level = data.data?.level || data.data?.thinkingLevel || (typeof data.data === 'string' ? data.data : '');
+  if (!level) {
+    thinkingLevelSupported = false;
+    updateThinkingBtn();
+    return false;
+  }
+  thinkingLevelSupported = true;
+  currentThinkingLevel = level;
+  updateThinkingBtn();
+  return true;
 }
 
 function updateModelLabel() {
   const shortName = currentModelId.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-  modelDropdownLabel.textContent = shortName || 'model';
+  modelDropdownLabel.textContent = shortName || (modelInfoLoaded ? 'No model' : 'model');
 }
 
 function toggleModelDropdown() {
@@ -1085,6 +1140,13 @@ function openModelDropdown() {
   function renderItems(filter) {
     itemsContainer.innerHTML = '';
     const query = (filter || '').toLowerCase();
+    if (availableModels.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'model-dropdown-item';
+      empty.textContent = 'No models found';
+      itemsContainer.appendChild(empty);
+      return;
+    }
     availableModels.forEach(m => {
       const shortName = m.id.replace(/-\d{8}$/, '');
       const providerStr = m.provider || '';
@@ -1097,13 +1159,17 @@ function openModelDropdown() {
       el.innerHTML = `<span>${shortName}${providerLabel}</span><span class="model-dropdown-item-ctx">${ctxK}</span>`;
       el.addEventListener('click', async () => {
         closeModelDropdown();
-        const display = m.id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-        await rpcCommand({ type: 'set_model', provider: m.provider, modelId: m.id }, `Switching to ${display}...`);
-        currentModelId = m.id;
-        updateModelLabel();
-        if (m.contextWindow) {
-          contextWindowSize = m.contextWindow;
-          updateTokenUsage();
+      const display = m.id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+      const data = await rpcCommand({ type: 'set_model', provider: m.provider, modelId: m.id }, `Switching to ${display}...`);
+      currentModelId = m.id;
+      const selectedModel = data?.data?.model || data?.data || m;
+      thinkingLevelSupported = modelSupportsThinkingLevel(selectedModel);
+      if (data?.data?.thinkingLevel) currentThinkingLevel = data.data.thinkingLevel;
+      updateThinkingBtn();
+      updateModelLabel();
+      if (m.contextWindow) {
+        contextWindowSize = m.contextWindow;
+        updateTokenUsage();
         }
       });
       itemsContainer.appendChild(el);
@@ -1142,11 +1208,9 @@ document.addEventListener('click', (e) => {
 
 // Thinking level button — cycles through levels
 thinkingBtn.addEventListener('click', async () => {
+  if (!thinkingLevelSupported) return;
   const data = await rpcCommand({ type: 'cycle_thinking_level' }, 'Cycling thinking...');
-  if (data?.success && data.data?.level) {
-    currentThinkingLevel = data.data.level;
-    updateThinkingBtn();
-  }
+  applyThinkingLevelResponse(data);
 });
 
 // ═══════════════════════════════════════
@@ -1235,7 +1299,7 @@ refreshSessionsBtn.addEventListener('click', () => {
   refreshSessionsBtn.classList.add('spinning');
   sidebar.loadSessions().then(() => {
     setTimeout(() => refreshSessionsBtn.classList.remove('spinning'), 600);
-    if (isMirrorMode) updateMirrorLiveIndicator();
+    updateMirrorLiveIndicator();
   });
 });
 
@@ -1329,12 +1393,30 @@ async function newSession() {
 }
 
 async function handleSessionSelect(session, project) {
+  returnToChatSurface();
+
+  if (!session) {
+    sidebar.clearActive();
+    setSelectedSessionState(null, null);
+    await switchSession(null);
+    return;
+  }
+
   sidebar.setActive(session.filePath);
   setSelectedSessionState(session, project);
   sessionTotalCost = 0;
   lastInputTokens = 0;
   updateCostDisplay();
   updateTokenUsage();
+
+  try {
+    await ensureWorkspaceForSelectedSession(session, project);
+  } catch (error) {
+    console.error('[App] Failed to switch project for session:', error);
+    messageRenderer.renderError(`Failed to switch project: ${error.message || error}`);
+    return;
+  }
+
   await switchSession(session.filePath, session, project);
 
   // Close sidebar on mobile after selecting
@@ -1400,15 +1482,19 @@ async function switchSession(sessionFile, session = null, project = null) {
     // In mirror mode, check if this session is live on any instance
     if (isMirrorMode) {
       // Check if this session is live on a different instance
-      const otherInstance = liveInstances.find(i => i.sessionFile === sessionFile && i.port !== new URL(wsClient.url).port * 1);
+      const currentPid = window.tauDesktop?.instanceId ? Number(window.tauDesktop.instanceId) : null;
+      const currentPort = window.tauDesktop?.transport === 'mirror' && wsClient.url?.startsWith('ws')
+        ? Number(new URL(wsClient.url).port)
+        : null;
+      const otherInstance = liveInstances.find(i => {
+        if (i.sessionFile !== sessionFile) return false;
+        const transport = i.transport || (i.port ? 'mirror' : 'rpc');
+        if (transport === 'mirror') return i.port && Number(i.port) !== currentPort;
+        return i.pid && Number(i.pid) !== currentPid;
+      });
       if (otherInstance) {
-        // Reconnect to the other instance
-        const protocol = document.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const newUrl = `${protocol}//${location.hostname}:${otherInstance.port}/ws`;
-        console.log(`[App] Switching to instance on port ${otherInstance.port}`);
-        window.tauDesktop?.setInstancePort?.(otherInstance.port);
-        wsClient.disconnect();
-        wsClient.url = newUrl;
+        console.log(`[App] Switching to instance ${otherInstance.pid || otherInstance.port}`);
+        setWorkspaceFromInstance(otherInstance);
         wsClient.forceReconnect();
         mirrorActiveSessionFile = sessionFile;
         viewingActiveSession = true;
@@ -1472,16 +1558,23 @@ function handleMirrorSync(data) {
 
   // Update model display
   if (data.model) {
-    currentModelId = data.model.id || '';
+    currentModelId = modelIdFromValue(data.model);
+    modelInfoLoaded = true;
+    thinkingLevelSupported = modelSupportsThinkingLevel(data.model);
     updateModelLabel();
-    if (data.model.contextWindow) {
-      contextWindowSize = data.model.contextWindow;
+    const contextWindow = data.model.contextWindow || data.model.context_window;
+    if (contextWindow) {
+      contextWindowSize = contextWindow;
     }
+  } else {
+    fetchModelInfo();
   }
 
   // Update thinking level
   if (data.thinkingLevel) {
     currentThinkingLevel = data.thinkingLevel;
+    updateThinkingBtn();
+  } else if (data.model) {
     updateThinkingBtn();
   }
 
@@ -1529,15 +1622,32 @@ function mirrorEntriesContainText(entries, text) {
   });
 }
 
-// Mark all live sessions in the sidebar with a green dot
+// Mark only this window's active Pi session with a green dot.
 function updateMirrorLiveIndicator() {
-  const liveFiles = new Set(liveInstances.map(i => i.sessionFile));
-  // Also include the current mirror session
-  if (mirrorActiveSessionFile) liveFiles.add(mirrorActiveSessionFile);
+  const activeFile = activeLiveSessionFile();
 
   document.querySelectorAll('.session-item').forEach(el => {
-    el.classList.toggle('mirror-live', liveFiles.has(el.dataset.filePath));
+    el.classList.toggle('mirror-live', Boolean(activeFile) && el.dataset.filePath === activeFile);
   });
+}
+
+function activeLiveSessionFile() {
+  const current = currentDesktopInstance();
+  return current?.sessionFile || mirrorActiveSessionFile || null;
+}
+
+function currentDesktopInstance() {
+  const transport = desiredDesktopTransport();
+  const currentPid = window.tauDesktop?.instanceId ? Number(window.tauDesktop.instanceId) : null;
+  const currentPort = window.tauDesktop?.instancePort ? Number(window.tauDesktop.instancePort) : null;
+
+  return liveInstances.find(instance => {
+    if (instanceTransport(instance) !== transport) return false;
+    if (transport === 'mirror') {
+      return currentPort && Number(instance.port) === currentPort;
+    }
+    return currentPid && Number(instance.pid) === currentPid;
+  }) || null;
 }
 
 function refreshSessionsSoon(delayMs = 500) {
@@ -1545,18 +1655,18 @@ function refreshSessionsSoon(delayMs = 500) {
   sessionRefreshTimer = setTimeout(() => {
     sessionRefreshTimer = null;
     sidebar.loadSessions().then(() => {
-      if (isMirrorMode) updateMirrorLiveIndicator();
+      updateMirrorLiveIndicator();
     });
   }, delayMs);
 }
 
-// Poll for running instances to mark all live sessions
+// Poll running instances so the active-session indicator follows this window.
 async function pollInstances() {
   try {
     const res = await fetch('/api/instances');
     if (res.ok) {
       const data = await res.json();
-      liveInstances = data.instances || [];
+      liveInstances = (data.instances || []).filter(isDesiredDesktopInstance);
       updateMirrorLiveIndicator();
     }
   } catch {}
@@ -1809,18 +1919,51 @@ function renderSelectedSessionStrip(project = null) {
   }
 }
 
-function setWorkspaceFromInstance(instance) {
+function setWorkspaceFromInstance(instance, options = {}) {
   if (!instance) return;
-  updateWsUrlFromInstance(instance);
+  updateTransportFromInstance(instance);
   setWorkspaceState({
     path: instance.projectPath || instance.project_path || '',
     noFolder: Boolean(instance.noFolder ?? instance.no_folder),
   });
+  if (options.resetSession) {
+    resetSelectionToInstance(instance);
+  }
 }
 
-function updateWsUrlFromInstance(instance) {
+function resetSelectionToInstance(instance) {
+  const sessionFile = instance.sessionFile || instance.session_file || null;
+  selectedSessionFile = sessionFile;
+  selectedSessionLiveOnly = false;
+  mirrorActiveSessionFile = sessionFile;
+  selectedSessionTitle = instance.noFolder || instance.no_folder ? 'No folder' : '当前会话';
+  viewingActiveSession = true;
+  sidebar.clearActive();
+  updateMirrorInputState();
+  renderSelectedSessionStrip();
+  updateMirrorLiveIndicator();
+}
+
+function updateTransportFromInstance(instance) {
+  const transport = instance?.transport || (instance?.port ? 'mirror' : 'rpc');
+  window.tauDesktop?.setTransport?.(transport);
+
+  if (transport !== 'mirror') {
+    const pid = instance?.pid;
+    const previousPid = window.tauDesktop?.instanceId;
+    const sameRpcTarget = wsClient.url === 'pi-rpc://desktop' && (!pid || Number(previousPid) === Number(pid));
+    window.tauDesktop?.setInstancePort?.(null);
+    if (pid) window.tauDesktop?.setInstanceId?.(pid);
+    if (wsClient.url !== 'pi-rpc://desktop') wsClient.url = 'pi-rpc://desktop';
+    if (!sameRpcTarget && (wsClient.connectionState === 'open' || wsClient.connectionState === 'connecting')) {
+      wsClient.forceReconnect();
+    }
+    return;
+  }
+
   const port = instance?.port;
   if (!port) return;
+  window.tauDesktop?.setInstanceId?.(null);
   window.tauDesktop?.setInstancePort?.(port);
   const nextUrl = `ws://127.0.0.1:${port}/ws`;
   if (wsClient.url === nextUrl) return;
@@ -1952,7 +2095,9 @@ async function openSettings() {
         invoke('get_pi_runtime_info').catch((error) => ({ error: String(error) })),
       ]);
       toggleAutostart.className = `settings-toggle${autostartEnabled ? ' on' : ''}`;
-      btnTauPort.textContent = String(settings.tauPort || 3001);
+      btnTauPort.textContent = window.tauDesktop?.transport === 'mirror'
+        ? String(settings.tauPort || 3001)
+        : 'Native RPC';
       renderPiRuntimeInfo(piInfo);
     } catch (e) {
       console.warn('[Desktop] Failed to read desktop settings:', e);
@@ -1980,8 +2125,7 @@ async function openSettings() {
       const s = data.data;
       // Auto-compaction toggle
       toggleAutoCompact.className = `settings-toggle${s.autoCompactionEnabled ? ' on' : ''}`;
-      // Thinking level
-      btnThinkingLevel.textContent = s.thinkingLevel || 'off';
+      thinkingLevelSupported = modelSupportsThinkingLevel(modelFromStateOrList(s.model));
       currentThinkingLevel = s.thinkingLevel || 'off';
       updateThinkingBtn();
       // Session name
@@ -2298,12 +2442,9 @@ toggleAutoCompact.addEventListener('click', async () => {
 
 // Thinking level cycle (settings panel button)
 btnThinkingLevel.addEventListener('click', async () => {
+  if (!thinkingLevelSupported) return;
   const data = await rpcCommand({ type: 'cycle_thinking_level' });
-  if (data?.success && data.data?.level) {
-    btnThinkingLevel.textContent = data.data.level;
-    currentThinkingLevel = data.data.level;
-    updateThinkingBtn();
-  }
+  applyThinkingLevelResponse(data);
 });
 
 // Show thinking toggle (local pref)
@@ -2561,11 +2702,11 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
     const data = await res.json();
     if (data.ok) {
       desktopHasActivePiSession = true;
-      setWorkspaceFromInstance(data.instance);
+      setWorkspaceFromInstance(data.instance, { resetSession: true });
       await launcher.load();
       hideLauncher();
       wsClient.forceReconnect();
-      setTimeout(() => sidebar.loadSessions(), 1000);
+      setTimeout(() => sidebar.loadSessions().then(updateMirrorLiveIndicator), 1000);
       if (isDesktop) {
         invoke('notify_desktop', {
           request: { title: 'pi-studio', body: 'Pi is running and pi-studio is connected.' },
@@ -2609,11 +2750,11 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
     const data = await res.json();
     if (data.ok) {
       desktopHasActivePiSession = true;
-      setWorkspaceFromInstance(data.instance);
+      setWorkspaceFromInstance(data.instance, { resetSession: true });
       await launcher.load();
       hideLauncher();
       wsClient.forceReconnect();
-      setTimeout(() => sidebar.loadSessions(), 1000);
+      setTimeout(() => sidebar.loadSessions().then(updateMirrorLiveIndicator), 1000);
     } else {
       launcher.setError(data.error || 'Failed to launch Pi');
     }
@@ -2621,7 +2762,7 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
     console.error('[Launcher] Failed to launch no-folder mode:', e);
     launcher.setError(String(e));
   }
-});
+}, hideLauncher);
 
 workspaceChip?.addEventListener('click', () => {
   if (selectedSessionFile) sidebar.setActive(selectedSessionFile);
@@ -2651,10 +2792,68 @@ async function getRunningInstances() {
     const res = await fetch('/api/instances');
     if (!res.ok) return [];
     const data = await res.json();
-    return data.instances || [];
+    return (data.instances || []).filter(isDesiredDesktopInstance);
   } catch {
     return [];
   }
+}
+
+async function ensureWorkspaceForSelectedSession(session, project) {
+  if (!isDesktop || !desktopHasActivePiSession) return;
+
+  const targetNoFolder = Boolean(session?.noFolder || project?.noFolder);
+  const targetPath = session?.cwd || project?.path || '';
+  if (!targetNoFolder && !targetPath) return;
+  if (
+    currentWorkspace.noFolder === targetNoFolder &&
+    (targetNoFolder || sameWorkspacePath(currentWorkspace.path, targetPath))
+  ) {
+    return;
+  }
+
+  updateConnectionStatus('connecting');
+  const res = await fetch('/api/projects/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(targetNoFolder ? { noFolder: true } : { path: targetPath }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+
+  desktopHasActivePiSession = true;
+  if (data.instance) {
+    liveInstances = [data.instance];
+    setWorkspaceFromInstance(data.instance);
+  }
+  updateConnectionStatus('connected');
+  wsClient.forceReconnect();
+}
+
+function sameWorkspacePath(a, b) {
+  const left = normalizeWorkspacePath(a);
+  const right = normalizeWorkspacePath(b);
+  return Boolean(left && right && left === right);
+}
+
+function normalizeWorkspacePath(path) {
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+function instanceTransport(instance) {
+  return instance?.transport || (instance?.port ? 'mirror' : 'rpc');
+}
+
+function desiredDesktopTransport() {
+  return window.tauDesktop?.transport || 'rpc';
+}
+
+function isDesiredDesktopInstance(instance) {
+  return instanceTransport(instance) === desiredDesktopTransport();
 }
 
 function delay(ms) {
@@ -2662,16 +2861,16 @@ function delay(ms) {
 }
 
 async function ensureDefaultPiSession() {
-  if (!isDesktop || desktopPort) return null;
+  if (!isDesktop || desktopPort || desktopInstanceId) return null;
   updateConnectionStatus('connecting');
   setWorkspaceState({ path: '', noFolder: false });
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
     const instances = await getRunningInstances();
     if (instances.length > 0) {
       desktopHasActivePiSession = true;
       liveInstances = instances;
-      setWorkspaceFromInstance(instances[0]);
+      setWorkspaceFromInstance(instances[0], { resetSession: true });
       return instances[0];
     }
     await delay(500);
@@ -2680,7 +2879,7 @@ async function ensureDefaultPiSession() {
   const instance = await invoke('ensure_default_pi_session');
   desktopHasActivePiSession = true;
   liveInstances = instance ? [instance] : [];
-  setWorkspaceFromInstance(instance);
+  setWorkspaceFromInstance(instance, { resetSession: true });
   return instance;
 }
 
@@ -2694,6 +2893,10 @@ function addLauncherNav() {
     launcherLink.title = 'Projects';
     launcherLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
     launcherLink.addEventListener('click', () => {
+      if (!launcherEl.classList.contains('hidden')) {
+        hideLauncher();
+        return;
+      }
       showLauncher();
     });
     modeToggle.appendChild(launcherLink);
@@ -2738,6 +2941,12 @@ function hideLauncher() {
   document.querySelector('.mode-link:first-child')?.classList.add('active');
 }
 
+function returnToChatSurface() {
+  settingsPanel.classList.add('hidden');
+  hideExtensions(false);
+  hideLauncher();
+}
+
 // Make the tau icon in sidebar switch back to chat
 document.querySelector('.mode-link:first-child')?.addEventListener('click', () => {
   settingsPanel.classList.add('hidden');
@@ -2762,8 +2971,14 @@ if (isDesktop) {
         setWorkspaceFromInstance(event.payload.instance);
       }
       updateConnectionStatus('connected');
+      hideLauncher();
+      if (wsClient.connectionState !== 'open') {
+        wsClient.forceReconnect();
+      } else {
+        fetchModelInfo();
+      }
       sidebar.loadSessions().then(() => {
-        if (isMirrorMode) updateMirrorLiveIndicator();
+        updateMirrorLiveIndicator();
       });
     } else if (event.payload?.status === 'error') {
       desktopHasActivePiSession = false;
@@ -2783,7 +2998,7 @@ if (isDesktop) {
 async function initApp() {
   await initLauncher();
 
-  if (isDesktop && !desktopPort) {
+  if (isDesktop && !desktopPort && !desktopInstanceId) {
     try {
       await ensureDefaultPiSession();
     } catch (error) {
@@ -2801,7 +3016,7 @@ async function initApp() {
   messageRenderer.renderWelcome();
   wsClient.connect();
   sidebar.loadSessions().then(() => {
-    if (isMirrorMode) updateMirrorLiveIndicator();
+    updateMirrorLiveIndicator();
   });
 }
 

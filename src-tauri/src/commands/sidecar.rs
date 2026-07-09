@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::sleep;
 
-use crate::{AppState, PiInstance};
+use crate::{AppState, PiInstance, PiTransport};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -100,6 +100,11 @@ pub async fn start_pi_process(
     state: State<'_, AppState>,
     request: StartPiRequest,
 ) -> Result<PiInstance, String> {
+    let desired_transport = desktop_transport();
+    crate::settings::append_desktop_log(format!(
+        "start_pi_process transport={desired_transport:?} path={:?} no_folder={:?}",
+        request.path, request.no_folder
+    ));
     let no_folder = request.no_folder.unwrap_or(false);
     let project_path = if no_folder {
         PathBuf::from(crate::settings::no_folder_launch_path()?)
@@ -112,6 +117,10 @@ pub async fn start_pi_process(
         )
     };
     if !project_path.exists() {
+        crate::settings::append_desktop_log(format!(
+            "project path does not exist: {}",
+            project_path.display()
+        ));
         return Err(format!(
             "Project path does not exist: {}",
             project_path.display()
@@ -119,20 +128,20 @@ pub async fn start_pi_process(
     }
 
     if no_folder {
-        if let Some(existing) = find_no_folder_instance(&state)? {
-            if is_compatible_tau_port(existing.port).await {
-                set_active_instance(&state, existing.clone())?;
-                return Ok(existing);
+        if let Some(existing) = find_no_folder_instance(&state, &project_path)? {
+            if let Some(instance) =
+                reuse_or_stop_existing_instance(&state, existing, desired_transport).await?
+            {
+                return Ok(instance);
             }
-            let _ = stop_pi_inner(state.inner(), Some(existing.pid));
         }
     } else if let Some(path) = request.path.as_deref() {
         if let Some(existing) = find_instance_by_path(&state, path)? {
-            if is_compatible_tau_port(existing.port).await {
-                set_active_instance(&state, existing.clone())?;
-                return Ok(existing);
+            if let Some(instance) =
+                reuse_or_stop_existing_instance(&state, existing, desired_transport).await?
+            {
+                return Ok(instance);
             }
-            let _ = stop_pi_inner(state.inner(), Some(existing.pid));
         }
     }
 
@@ -147,6 +156,10 @@ pub async fn start_pi_process(
         for pid in stale_pids {
             children.remove(&pid);
         }
+    }
+
+    if desired_transport == PiTransport::Rpc {
+        return start_pi_rpc_process(app, state, project_path, no_folder, request.path).await;
     }
 
     let port = request.port.unwrap_or_else(|| allocate_port(3001));
@@ -208,7 +221,9 @@ pub async fn start_pi_process(
     let pid = child.id();
     let instance = PiInstance {
         pid,
-        port,
+        port: Some(port),
+        transport: PiTransport::Mirror,
+        session_file: None,
         project_path: project_path.display().to_string(),
         no_folder,
         started_at: timestamp_string(),
@@ -247,6 +262,128 @@ pub async fn start_pi_process(
     Ok(instance)
 }
 
+async fn start_pi_rpc_process(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_path: PathBuf,
+    no_folder: bool,
+    original_path: Option<String>,
+) -> Result<PiInstance, String> {
+    let pi_command = resolve_pi_command(&app)?;
+    let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
+    crate::settings::append_desktop_log(format!(
+        "starting Pi RPC command={} cwd={} session_dir={}",
+        pi_command.display,
+        project_path.display(),
+        session_dir.display()
+    ));
+
+    let mut command = Command::new(&pi_command.program);
+    configure_hidden_process(&mut command);
+    command
+        .current_dir(&project_path)
+        .args(&pi_command.initial_args)
+        .arg("--mode")
+        .arg("rpc")
+        .arg("--session-dir")
+        .arg(session_dir)
+        .arg("--no-approve")
+        .env("TAU_DESKTOP", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let (stdout_log, stderr_log) = pi_rpc_log_files();
+
+    let mut child = command.spawn().map_err(|err| {
+        crate::settings::append_desktop_log(format!("Pi RPC spawn failed: {err}"));
+        if pi_command.is_system_fallback {
+            format!(
+                "System Pi could not be started. Check that `pi` is available on PATH, or run the Pi vendor script before packaging. Tried `{}`: {}",
+                pi_command.display, err
+            )
+        } else {
+            format!("Failed to start bundled Pi `{}`: {}", pi_command.display, err)
+        }
+    })?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open Pi RPC stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open Pi RPC stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open Pi RPC stderr".to_string())?;
+
+    let pid = child.id();
+    crate::settings::append_desktop_log(format!("Pi RPC spawned pid={pid}"));
+    let mut instance = PiInstance {
+        pid,
+        port: None,
+        transport: PiTransport::Rpc,
+        session_file: None,
+        project_path: project_path.display().to_string(),
+        no_folder,
+        started_at: timestamp_string(),
+    };
+
+    state
+        .pi_children
+        .lock()
+        .map_err(lock_err)?
+        .insert(pid, child);
+    set_active_instance(&state, instance.clone())?;
+    crate::rpc::client::register_rpc_io(
+        app.clone(),
+        state.inner(),
+        pid,
+        stdin,
+        stdout,
+        stderr,
+        stdout_log,
+        stderr_log,
+    )?;
+    monitor_pi_process(app.clone(), pid);
+
+    if !crate::rpc::client::wait_for_rpc_ready(state.inner(), pid).await {
+        crate::settings::append_desktop_log(format!("Pi RPC readiness timed out pid={pid}"));
+        let _ = stop_pi_inner(state.inner(), Some(pid));
+        return Err("Pi started, but native RPC did not become ready.".to_string());
+    }
+    crate::settings::append_desktop_log(format!("Pi RPC ready pid={pid}"));
+
+    if let Ok(snapshot) = crate::rpc::client::build_snapshot(state.inner(), pid).await {
+        if let Some(session_file) = snapshot
+            .get("sessionFile")
+            .and_then(serde_json::Value::as_str)
+        {
+            instance.session_file = Some(session_file.to_string());
+            set_active_instance(&state, instance.clone())?;
+        }
+    }
+
+    let _ = app.emit(
+        "tau-pi-status",
+        serde_json::json!({
+            "status": "running",
+            "instance": instance,
+        }),
+    );
+
+    if no_folder {
+        crate::settings::activate_no_folder()?;
+    } else if let Some(path) = original_path {
+        crate::settings::upsert_project(path)?;
+    }
+
+    Ok(instance)
+}
+
 #[tauri::command]
 pub async fn stop_pi(state: State<'_, AppState>, pid: Option<u32>) -> Result<(), String> {
     stop_pi_by_state(&state, pid)
@@ -263,6 +400,7 @@ fn stop_pi_inner(state: &AppState, pid: Option<u32>) -> Result<(), String> {
         .or(active_pid)
         .ok_or_else(|| "No active Pi process".to_string())?;
 
+    crate::rpc::client::clear_rpc_process(state, target_pid);
     if let Some(mut child) = state
         .pi_children
         .lock()
@@ -272,6 +410,7 @@ fn stop_pi_inner(state: &AppState, pid: Option<u32>) -> Result<(), String> {
         let _ = child.kill();
         let _ = child.wait();
     }
+    crate::settings::remove_runtime_instance(target_pid);
 
     if active_pid == Some(target_pid) {
         *state.active_pid.lock().map_err(lock_err)? = None;
@@ -282,16 +421,7 @@ fn stop_pi_inner(state: &AppState, pid: Option<u32>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn list_instances(state: State<'_, AppState>) -> Result<Vec<PiInstance>, String> {
-    Ok(crate::settings::load_runtime_instances()
-        .into_iter()
-        .filter(|instance| {
-            state
-                .pi_children
-                .lock()
-                .map(|children| children.contains_key(&instance.pid))
-                .unwrap_or(false)
-        })
-        .collect())
+    Ok(running_instances_for_current_transport(state.inner()))
 }
 
 #[tauri::command]
@@ -308,6 +438,13 @@ pub async fn switch_instance(state: State<'_, AppState>, pid: u32) -> Result<PiI
     {
         return Err(format!("Pi instance {pid} is no longer running"));
     }
+    if instance.transport != desktop_transport() {
+        return Err(format!(
+            "Pi instance {pid} is using {:?}, but the desktop transport is {:?}",
+            instance.transport,
+            desktop_transport()
+        ));
+    }
     set_active_instance(&state, instance.clone())?;
     Ok(instance)
 }
@@ -319,7 +456,11 @@ pub fn active_instance_for_port(
     if let Some(port) = port {
         return crate::settings::load_runtime_instances()
             .into_iter()
-            .find(|instance| instance.port == port);
+            .find(|instance| {
+                instance.transport == desktop_transport()
+                    && instance.port == Some(port)
+                    && is_managed_instance(state.inner(), instance)
+            });
     }
 
     state
@@ -327,22 +468,22 @@ pub fn active_instance_for_port(
         .lock()
         .ok()
         .and_then(|instance| instance.clone())
-}
-
-pub fn base_url_for_port(state: &State<'_, AppState>, port: Option<u16>) -> String {
-    let port = active_instance_for_port(state, port)
-        .map(|instance| instance.port)
-        .or(port)
-        .unwrap_or(3001);
-    format!("http://127.0.0.1:{port}")
+        .filter(|instance| {
+            instance.transport == desktop_transport()
+                && is_managed_instance(state.inner(), instance)
+        })
 }
 
 pub fn active_ws_url(state: &State<'_, AppState>) -> Option<String> {
-    let port = state
+    let instance = state
         .active_instance
         .lock()
         .ok()
-        .and_then(|instance| instance.as_ref().map(|instance| instance.port))?;
+        .and_then(|instance| instance.clone())?;
+    if instance.transport != PiTransport::Mirror {
+        return None;
+    }
+    let port = instance.port?;
     Some(format!("ws://127.0.0.1:{port}/ws"))
 }
 
@@ -360,15 +501,15 @@ fn resolve_pi_command(app: &AppHandle) -> Result<PiCommand, String> {
         });
     }
 
-    if let Some(command) = system_pi_command() {
-        return Ok(command);
-    }
-
     for binaries_root in candidate_binaries_roots(app) {
         let platform_dir = binaries_root.join(platform_binaries_dir()?);
         if let Some(command) = bundled_pi_command(&platform_dir) {
             return Ok(command);
         }
+    }
+
+    if let Some(command) = system_pi_command() {
+        return Ok(command);
     }
 
     Ok(PiCommand {
@@ -513,6 +654,43 @@ fn platform_binaries_dir() -> Result<&'static str, String> {
     }
 }
 
+pub fn desktop_transport() -> PiTransport {
+    match env::var("PI_DESKTOP_TRANSPORT") {
+        Ok(value) if value.eq_ignore_ascii_case("mirror") => PiTransport::Mirror,
+        _ => PiTransport::Rpc,
+    }
+}
+
+pub fn is_managed_instance(state: &AppState, instance: &PiInstance) -> bool {
+    let child_running = state
+        .pi_children
+        .lock()
+        .map(|children| children.contains_key(&instance.pid))
+        .unwrap_or(false);
+    if !child_running {
+        return false;
+    }
+
+    match instance.transport {
+        PiTransport::Rpc => state
+            .rpc_writers
+            .lock()
+            .map(|writers| writers.contains_key(&instance.pid))
+            .unwrap_or(false),
+        PiTransport::Mirror => instance.port.is_some(),
+    }
+}
+
+pub fn running_instances_for_current_transport(state: &AppState) -> Vec<PiInstance> {
+    let desired_transport = desktop_transport();
+    crate::settings::load_runtime_instances()
+        .into_iter()
+        .filter(|instance| {
+            instance.transport == desired_transport && is_managed_instance(state, instance)
+        })
+        .collect()
+}
+
 fn command_output(program: &Path, args: &[&str]) -> Option<String> {
     let output = hidden_command(program).args(args).output().ok()?;
     if !output.status.success() {
@@ -610,15 +788,30 @@ fn pi_log_files(port: u16) -> Option<(Stdio, Stdio)> {
     Some((Stdio::from(stdout), Stdio::from(stderr)))
 }
 
+fn pi_rpc_log_files() -> (Option<File>, Option<File>) {
+    let Some(dir) = dirs::config_dir().map(|dir| dir.join("pi-studio").join("logs")) else {
+        return (None, None);
+    };
+    if create_dir_all(&dir).is_err() {
+        return (None, None);
+    }
+    let stamp = timestamp_string();
+    let stdout = File::create(dir.join(format!("pi-rpc-{stamp}.out.log"))).ok();
+    let stderr = File::create(dir.join(format!("pi-rpc-{stamp}.err.log"))).ok();
+    (stdout, stderr)
+}
+
 fn pi_session_dir(project_path: &Path) -> Result<PathBuf, String> {
     let agent_dir = env::var("PI_CODING_AGENT_DIR")
         .ok()
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".pi").join("agent")))
         .ok_or_else(|| "Could not resolve Pi agent directory".to_string())?;
-    let resolved_project = project_path
-        .canonicalize()
-        .unwrap_or_else(|_| project_path.to_path_buf());
+    let resolved_project = normalize_child_path(
+        project_path
+            .canonicalize()
+            .unwrap_or_else(|_| project_path.to_path_buf()),
+    );
     let safe_path = encode_session_dir_name(&resolved_project.display().to_string());
     let session_dir = agent_dir.join("sessions").join(safe_path);
     create_dir_all(&session_dir).map_err(|err| err.to_string())?;
@@ -630,7 +823,8 @@ fn encode_session_dir_name(path: &str) -> String {
     let safe = trimmed
         .chars()
         .map(|ch| match ch {
-            '/' | '\\' | ':' => '-',
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
+            ch if ch.is_control() => '-',
             _ => ch,
         })
         .collect::<String>();
@@ -701,6 +895,7 @@ fn monitor_pi_process(app: AppHandle, pid: u32) {
                 {
                     Some(status) => {
                         children.remove(&pid);
+                        crate::rpc::client::clear_rpc_process(state.inner(), pid);
                         Some(status.to_string())
                     }
                     None => None,
@@ -758,11 +953,42 @@ fn find_instance_by_path(
         }))
 }
 
-fn find_no_folder_instance(state: &State<'_, AppState>) -> Result<Option<PiInstance>, String> {
+fn find_no_folder_instance(
+    state: &State<'_, AppState>,
+    project_path: &Path,
+) -> Result<Option<PiInstance>, String> {
     let children = state.pi_children.lock().map_err(lock_err)?;
     Ok(crate::settings::load_runtime_instances()
         .into_iter()
-        .find(|instance| children.contains_key(&instance.pid) && instance.no_folder))
+        .find(|instance| {
+            children.contains_key(&instance.pid)
+                && instance.no_folder
+                && same_path(&instance.project_path, &project_path.display().to_string())
+        }))
+}
+
+async fn reuse_or_stop_existing_instance(
+    state: &State<'_, AppState>,
+    existing: PiInstance,
+    desired_transport: PiTransport,
+) -> Result<Option<PiInstance>, String> {
+    let reusable = if existing.transport != desired_transport {
+        false
+    } else if existing.transport == PiTransport::Rpc {
+        is_managed_instance(state.inner(), &existing)
+    } else if let Some(port) = existing.port {
+        is_compatible_tau_port(port).await
+    } else {
+        false
+    };
+
+    if reusable {
+        set_active_instance(state, existing.clone())?;
+        return Ok(Some(existing));
+    }
+
+    let _ = stop_pi_inner(state.inner(), Some(existing.pid));
+    Ok(None)
 }
 
 fn set_active_instance(state: &State<'_, AppState>, instance: PiInstance) -> Result<(), String> {

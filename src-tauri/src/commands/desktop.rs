@@ -7,9 +7,10 @@ use tauri_plugin_notification::NotificationExt;
 use crate::settings::{self, DesktopSettings};
 use crate::{
     commands::sidecar::{
-        is_compatible_tau_port, lock_err, start_pi_process, stop_pi_by_state, StartPiRequest,
+        desktop_transport, is_compatible_tau_port, is_managed_instance, lock_err, start_pi_process,
+        stop_pi_by_state, StartPiRequest,
     },
-    AppState, PiInstance,
+    AppState, PiInstance, PiTransport,
 };
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +42,7 @@ pub async fn ensure_default_pi_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PiInstance, String> {
+    let desired_transport = desktop_transport();
     let active_instance = {
         state
             .active_instance
@@ -50,17 +52,26 @@ pub async fn ensure_default_pi_session(
             .cloned()
     };
     if let Some(instance) = active_instance {
-        let is_running = {
+        let child_running = {
             state
                 .pi_children
                 .lock()
                 .map_err(lock_err)?
                 .contains_key(&instance.pid)
         };
-        if is_running && is_compatible_tau_port(instance.port).await {
+        let compatible = if instance.transport != desired_transport {
+            false
+        } else if instance.transport == PiTransport::Rpc {
+            is_managed_instance(state.inner(), &instance)
+        } else if let Some(port) = instance.port {
+            is_compatible_tau_port(port).await
+        } else {
+            false
+        };
+        if child_running && compatible {
             return Ok(instance);
         }
-        if is_running {
+        if child_running {
             let _ = stop_pi_by_state(&state, Some(instance.pid));
         }
     }
@@ -151,8 +162,13 @@ pub async fn open_project_window(
     )
     .await?;
 
-    let label = format!("tau-{}", instance.pid);
-    let url = WebviewUrl::App(format!("index.html?tauPort={}", instance.port).into());
+    let label = format!("pi-{}", instance.pid);
+    let url = match instance.transport {
+        PiTransport::Rpc => WebviewUrl::App(format!("index.html?piPid={}", instance.pid).into()),
+        PiTransport::Mirror => WebviewUrl::App(
+            format!("index.html?tauPort={}", instance.port.unwrap_or_default()).into(),
+        ),
+    };
     WebviewWindowBuilder::new(&app, label, url)
         .title(format!("pi-studio - {}", request.path))
         .inner_size(1280.0, 820.0)

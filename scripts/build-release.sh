@@ -28,7 +28,7 @@ npm install
 npm install --omit=dev --prefix "$ROOT/src-tauri/extensions"
 
 if [[ "$SMOKE" -eq 1 ]]; then
-  echo "Smoke test is currently implemented for Windows PowerShell. Run the app or add a Unix smoke wrapper on this platform."
+  bash "$ROOT/scripts/smoke-pi-tau.sh" --project-path "$ROOT" --timeout-seconds 45
 fi
 
 if [[ "$DEBUG" -eq 1 ]]; then

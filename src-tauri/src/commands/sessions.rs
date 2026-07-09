@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::settings;
+
 pub fn empty_sessions() -> serde_json::Value {
     sessions_list().unwrap_or_else(|_| json!({ "projects": [] }))
 }
@@ -100,6 +102,10 @@ fn sessions_list() -> Result<Value, String> {
             }
             if let Some(summary) = summarize_session(&path) {
                 let metadata = file.metadata().ok();
+                let no_folder = summary
+                    .cwd
+                    .as_deref()
+                    .is_some_and(settings::is_no_folder_path);
                 sessions.push(json!({
                     "file": file.file_name().to_string_lossy(),
                     "filePath": path.display().to_string(),
@@ -108,20 +114,32 @@ fn sessions_list() -> Result<Value, String> {
                     "timestamp": summary.timestamp,
                     "name": summary.name,
                     "firstMessage": summary.first_message,
-                    "cwd": summary.cwd
+                    "cwd": summary.cwd,
+                    "noFolder": no_folder
                 }));
             }
         }
         sessions.sort_by(|a, b| b["mtime"].as_u64().cmp(&a["mtime"].as_u64()));
         if !sessions.is_empty() {
-            let project_path = sessions
+            let raw_project_path = sessions
                 .iter()
                 .find_map(|session| session["cwd"].as_str())
                 .map(str::to_string)
                 .unwrap_or_else(|| decode_project_dir(&dir_name));
+            let no_folder = sessions
+                .iter()
+                .any(|session| session["noFolder"].as_bool() == Some(true))
+                || settings::is_no_folder_path(&raw_project_path);
+            let project_path = if no_folder {
+                settings::no_folder_launch_path().unwrap_or(raw_project_path)
+            } else {
+                raw_project_path
+            };
             projects.push(json!({
                 "path": project_path,
                 "dirName": dir_name,
+                "displayName": if no_folder { "No folder" } else { "" },
+                "noFolder": no_folder,
                 "sessions": sessions
             }));
         }
@@ -159,11 +177,17 @@ fn merge_live_sessions(projects: &mut Vec<Value>) {
                     .map(encode_project_dir)
                     .unwrap_or_else(|| "live".to_string())
             });
-        let project_path = live
+        let raw_project_path = live
             .get("cwd")
             .and_then(|value| value.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| decode_project_dir(&dir_name));
+        let no_folder = settings::is_no_folder_path(&raw_project_path);
+        let project_path = if no_folder {
+            settings::no_folder_launch_path().unwrap_or(raw_project_path)
+        } else {
+            raw_project_path
+        };
         let started_at = live
             .get("startedAt")
             .and_then(|value| value.as_str())
@@ -185,6 +209,7 @@ fn merge_live_sessions(projects: &mut Vec<Value>) {
             "name": "当前会话",
             "firstMessage": null,
             "cwd": project_path,
+            "noFolder": no_folder,
             "live": true,
             "fileExists": file_exists,
             "port": live.get("port").cloned().unwrap_or(Value::Null),
@@ -216,6 +241,8 @@ fn merge_live_sessions(projects: &mut Vec<Value>) {
             projects.push(json!({
                 "path": project_path,
                 "dirName": dir_name,
+                "displayName": if no_folder { "No folder" } else { "" },
+                "noFolder": no_folder,
                 "sessions": [session]
             }));
         }

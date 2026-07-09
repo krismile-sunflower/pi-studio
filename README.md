@@ -1,6 +1,6 @@
 # pi-studio
 
-pi-studio is a Tauri desktop client for Pi. Its web UI and mirror workflow are built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts Pi in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions without requiring users to open a terminal.
+pi-studio is a Tauri desktop client for Pi. Its web UI is built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts a bundled Pi RPC process in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions without requiring users to open a terminal.
 
 中文文档: [README.zh-CN.md](README.zh-CN.md)
 
@@ -8,9 +8,10 @@ pi-studio is a Tauri desktop client for Pi. Its web UI and mirror workflow are b
 
 - Starts Pi automatically from the desktop app.
 - Provides a desktop UI based on ideas and implementation patterns from Tau.
+- Uses native Pi RPC over the bundled child process by default, without a local mirror WebSocket server.
 - Uses the build machine's installed `pi` as the release packaging source.
 - Bundles platform-specific Node runtime and Pi npm package under `src-tauri/binaries/<platform>/`.
-- Keeps a development fallback through `PI_DESKTOP_CLI` or the system `pi` on `PATH`.
+- Resolves Pi in this order: `PI_DESKTOP_CLI`, bundled Pi, then system `pi` on `PATH`.
 - Supports project mode and no-folder mode.
 - Reads local sessions from `~/.pi/agent/sessions`.
 - Allows selecting a session in the sidebar and continuing chat in that session.
@@ -106,6 +107,12 @@ Development override:
 PI_DESKTOP_CLI=/path/to/pi npm run tauri:dev
 ```
 
+Legacy mirror/WebSocket transport is still available for compatibility:
+
+```bash
+PI_DESKTOP_TRANSPORT=mirror npm run tauri:dev
+```
+
 ## Release Builds
 
 Windows:
@@ -178,6 +185,8 @@ cargo check --manifest-path .\src-tauri\Cargo.toml
 npx tauri build --debug
 ```
 
+The smoke script checks native Pi RPC by default. Add `-Mirror` to run the legacy Tau mirror health check as well.
+
 macOS/Linux should run the equivalent build script on the target platform:
 
 ```bash
@@ -197,7 +206,7 @@ If sessions do not appear:
 
 - Confirm files exist under `~/.pi/agent/sessions`.
 - Click the session refresh button.
-- Start or restart Pi from pi-studio so the mirror extension can refresh live state.
+- Start or restart Pi from pi-studio so the native RPC session can refresh live state.
 
 If Windows debug build cannot overwrite `pi-studio.exe`:
 
@@ -207,8 +216,8 @@ If Windows debug build cannot overwrite `pi-studio.exe`:
 
 ## Notes
 
-pi-studio is not presented as the Tau project itself. It references and adapts Tau's browser UI and mirror-extension approach for a standalone desktop experience. The public desktop product name is `pi-studio`.
+pi-studio is not presented as the Tau project itself. It references and adapts Tau's browser UI for a standalone desktop experience, while the desktop app talks to Pi through native RPC by default. The public desktop product name is `pi-studio`.
 
 ## Attribution
 
-This project references [`deflating/tau`](https://github.com/deflating/tau) for the browser-based Pi UI and mirror workflow. Upstream Tau remains a separate project; pi-studio adapts those ideas into a Tauri desktop client with bundled Pi startup, local session management, and extension installation.
+This project references [`deflating/tau`](https://github.com/deflating/tau) for the browser-based Pi UI and mirror workflow. Upstream Tau remains a separate project; pi-studio adapts those ideas into a Tauri desktop client with bundled Pi startup, native RPC transport, local session management, and extension installation.

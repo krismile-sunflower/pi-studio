@@ -3,12 +3,13 @@
  */
 
 export class Launcher {
-  constructor(container, onLaunch, onAddProject = null, onOpenWindow = null, onNoFolder = null) {
+  constructor(container, onLaunch, onAddProject = null, onOpenWindow = null, onNoFolder = null, onClose = null) {
     this.container = container;
     this.onLaunch = onLaunch;
     this.onAddProject = onAddProject;
     this.onOpenWindow = onOpenWindow;
     this.onNoFolder = onNoFolder;
+    this.onClose = onClose;
     this.projects = [];
     this.noFolderActive = false;
     this.busyPath = null;
@@ -100,6 +101,7 @@ export class Launcher {
           <div class="launcher-title-actions">
             <button class="launcher-action" id="launcher-no-folder">No folder</button>
             <button class="launcher-action" id="launcher-add-project">Add project</button>
+            ${this.onClose ? '<button class="launcher-close" id="launcher-close" title="Back to chat" aria-label="Back to chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' : ''}
           </div>
         </div>
         ${this.error ? `<div class="launcher-error">${this.escHtml(this.error)}</div>` : ''}
@@ -114,14 +116,27 @@ export class Launcher {
       if (this.onAddProject) this.onAddProject();
     });
 
+    this.container.querySelector('#launcher-close')?.addEventListener('click', () => {
+      if (this.onClose) this.onClose();
+    });
+
     // Bind click handlers
     this.container.querySelectorAll('.launcher-bubble').forEach(btn => {
       btn.addEventListener('click', () => {
         if (btn.dataset.noFolder === 'true') {
+          if (this.noFolderActive && this.onClose) {
+            this.onClose();
+            return;
+          }
           if (this.onNoFolder) this.onNoFolder();
           return;
         }
         const projectPath = btn.dataset.path;
+        const project = this.projects.find(p => p.path === projectPath);
+        if (project?.active && this.onClose) {
+          this.onClose();
+          return;
+        }
         if (this.onLaunch) this.onLaunch(projectPath);
       });
     });

@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -113,13 +114,26 @@ pub fn activate_no_folder() -> Result<DesktopSettings, String> {
 }
 
 pub fn no_folder_launch_path() -> Result<String, String> {
-    let dir = dirs::data_local_dir()
-        .or_else(dirs::config_dir)
-        .ok_or_else(|| "Could not resolve app data directory".to_string())?
-        .join(APP_CONFIG_DIR)
-        .join("no-folder");
+    let dir = dirs::home_dir()
+        .ok_or_else(|| "Could not resolve the user home directory".to_string())?
+        .join(".pi");
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     Ok(dir.display().to_string())
+}
+
+pub fn is_no_folder_path(path: &str) -> bool {
+    let current = no_folder_launch_path()
+        .ok()
+        .map(PathBuf::from)
+        .is_some_and(|no_folder| same_path(&no_folder, &PathBuf::from(path)));
+    if current {
+        return true;
+    }
+
+    dirs::data_local_dir()
+        .or_else(dirs::config_dir)
+        .map(|dir| dir.join(APP_CONFIG_DIR).join("no-folder"))
+        .is_some_and(|legacy| same_path(&legacy, &PathBuf::from(path)))
 }
 
 pub fn default_launch_target() -> Result<LaunchTarget, String> {
@@ -207,7 +221,11 @@ pub fn upsert_runtime_instance(instance: PiInstance) {
         return;
     };
     let mut instances = load_runtime_instances();
-    instances.retain(|item| item.pid != instance.pid && item.port != instance.port);
+    instances.retain(|item| {
+        item.pid != instance.pid
+            && !(instance.port.is_some() && item.port == instance.port)
+            && !(item.no_folder == instance.no_folder && item.project_path == instance.project_path)
+    });
     instances.push(instance);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -226,6 +244,27 @@ pub fn remove_runtime_instance(pid: u32) {
     if let Ok(raw) = serde_json::to_string_pretty(&instances) {
         let _ = fs::write(path, raw);
     }
+}
+
+pub fn append_desktop_log(message: impl AsRef<str>) {
+    let Some(dir) = dirs::config_dir().map(|dir| dir.join(APP_CONFIG_DIR).join("logs")) else {
+        return;
+    };
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("desktop-startup.log"))
+    else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into());
+    let _ = writeln!(file, "[{now}] {}", message.as_ref());
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -276,4 +315,13 @@ fn default_projects() -> Vec<DesktopProject> {
         last_active: None,
         session_count: 0,
     }]
+}
+
+fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
+    let left = a.canonicalize().ok();
+    let right = b.canonicalize().ok();
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        _ => a == b,
+    }
 }

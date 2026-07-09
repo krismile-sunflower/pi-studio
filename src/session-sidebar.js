@@ -42,6 +42,10 @@ export class SessionSidebar {
     this.render();
   }
 
+  projectKey(project) {
+    return project?.noFolder ? '__no_folder__' : (project?.dirName || project?.path || '');
+  }
+
   async loadSessions() {
     try {
       this.container.innerHTML = Array.from({length: 6}, () =>
@@ -84,7 +88,7 @@ export class SessionSidebar {
 
     const addProjects = (projects) => {
       for (const project of projects || []) {
-        const key = project.dirName || project.path;
+        const key = this.projectKey(project);
         if (!key) continue;
 
         if (!merged.has(key)) {
@@ -96,6 +100,11 @@ export class SessionSidebar {
         }
 
         const existing = merged.get(key);
+        if (project.noFolder) {
+          existing.noFolder = true;
+          existing.displayName = project.displayName || 'No folder';
+          existing.path = project.path || existing.path;
+        }
         const seenFiles = new Set((existing.sessions || []).map(session => session.filePath || session.file));
         for (const session of project.sessions || []) {
           const sessionKey = session.filePath || session.file;
@@ -472,25 +481,27 @@ export class SessionSidebar {
     for (const project of this.projects) {
       const group = document.createElement('div');
       group.className = 'project-group';
-      const isCollapsed = this.collapsedProjects.has(project.dirName);
+      const projectKey = this.projectKey(project);
+      const isCollapsed = this.collapsedProjects.has(projectKey);
 
       const header = document.createElement('div');
       header.className = `project-header${isCollapsed ? ' collapsed' : ''}`;
 
-      const pathParts = project.path.split(/[\\/]/).filter(Boolean);
-      const shortPath = pathParts.length > 0 ? pathParts[pathParts.length - 1] : project.path;
+      const projectPath = project.path || '';
+      const pathParts = projectPath.split(/[\\/]/).filter(Boolean);
+      const shortPath = project.displayName || (project.noFolder ? 'No folder' : (pathParts.length > 0 ? pathParts[pathParts.length - 1] : projectPath));
 
       header.innerHTML = `
         <span class="chevron">&rsaquo;</span>
-        <span title="${this.escapeHtml(project.path)}">${this.escapeHtml(shortPath)}</span>
+        <span title="${this.escapeHtml(projectPath)}">${this.escapeHtml(shortPath)}</span>
         <span class="project-count">${project.sessions.length}</span>
       `;
 
       header.addEventListener('click', () => {
-        if (this.collapsedProjects.has(project.dirName)) {
-          this.collapsedProjects.delete(project.dirName);
+        if (this.collapsedProjects.has(projectKey)) {
+          this.collapsedProjects.delete(projectKey);
         } else {
-          this.collapsedProjects.add(project.dirName);
+          this.collapsedProjects.add(projectKey);
         }
         header.classList.toggle('collapsed');
         sessionsDiv.classList.toggle('collapsed');
