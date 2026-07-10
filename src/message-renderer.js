@@ -44,12 +44,14 @@ export class MessageRenderer {
   renderWelcome() {
     this.container.innerHTML = `
       <div class="welcome">
-        <div class="welcome-icon"><img src="icons/tau-192.png" alt="τ" class="tau-icon-welcome"></div>
-        <p>Welcome to pi-studio</p>
-        <p class="hint">Type a message below to start chatting with Pi, or select a session from the sidebar.</p>
+        <div class="welcome-mark"><img src="icons/tau-192.png" alt="" class="tau-icon-welcome"></div>
+        <span class="eyebrow">PI-STUDIO</span>
+        <h1>从一个问题开始</h1>
+        <p class="hint">与 Pi 协作理解代码、规划改动并完成任务。你也可以从左侧继续历史会话。</p>
         <div class="shortcuts-hint">
-          <span>/ Focus input</span>
-          <span>Esc Abort</span>
+          <span><kbd>/</kbd> 聚焦输入框</span>
+          <span><kbd>⌘K</kbd> 打开命令</span>
+          <span><kbd>Esc</kbd> 停止生成</span>
         </div>
       </div>
     `;
@@ -68,14 +70,14 @@ export class MessageRenderer {
       imagesHtml = '<div class="message-images">' +
         message.images.map(img => {
           const src = img.data.startsWith('data:') ? img.data : `data:${img.mimeType || 'image/png'};base64,${img.data}`;
-          return `<img class="message-image" src="${src}" alt="Attached image" />`;
+          return `<img class="message-image" src="${src}" alt="消息附件" />`;
         }).join('') +
         '</div>';
     }
 
     div.innerHTML = `
       <div class="message-content">${imagesHtml}${renderUserMarkdown(message.content)}</div>
-      <button class="message-copy-btn" aria-label="Copy message"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button class="message-copy-btn" aria-label="复制消息"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
     `;
     this._setupCopyBtn(div);
     this.container.appendChild(div);
@@ -84,6 +86,10 @@ export class MessageRenderer {
   }
 
   renderAssistantMessage(message, isStreaming = false, isHistory = false) {
+    if (!isStreaming && this.hasAssistantError(message)) {
+      return this.renderAssistantError(message, isHistory);
+    }
+
     // Remove welcome message if present
     const welcome = this.container.querySelector('.welcome');
     if (welcome) welcome.remove();
@@ -114,7 +120,7 @@ export class MessageRenderer {
     div.innerHTML = `
       <div class="message-content${streamingClass}">${contentHtml}</div>
       ${usageHtml}
-      ${!isStreaming ? '<button class="message-copy-btn" aria-label="Copy message"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : ''}
+      ${!isStreaming ? '<button class="message-copy-btn" aria-label="复制消息"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : ''}
     `;
 
     if (!isStreaming) {
@@ -127,12 +133,98 @@ export class MessageRenderer {
     return div;
   }
 
+  hasAssistantError(message) {
+    return Boolean(
+      message && (
+        message.stopReason === 'error' ||
+        message.stop_reason === 'error' ||
+        message.errorMessage ||
+        message.error_message ||
+        message.error
+      )
+    );
+  }
+
+  renderAssistantError(message, isHistory = false, replaceElement = null) {
+    const error = this.formatAssistantError(message);
+    const div = document.createElement('div');
+    div.className = `message assistant assistant-error-message${isHistory ? ' history' : ''}`;
+    div.dataset.messageId = message?.id || 'assistant-error';
+
+    const detailsHtml = error.details
+      ? `<details class="assistant-error-details"><summary>查看错误详情</summary><pre>${this.escapeHtml(error.details)}</pre></details>`
+      : '';
+
+    div.innerHTML = `
+      <div class="assistant-error-card" role="alert">
+        <span class="assistant-error-icon" aria-hidden="true">!</span>
+        <div class="assistant-error-body">
+          <strong class="assistant-error-title">${this.escapeHtml(error.title)}</strong>
+          <p class="assistant-error-summary">${this.escapeHtml(error.summary)}</p>
+          ${detailsHtml}
+        </div>
+      </div>
+    `;
+
+    if (replaceElement?.isConnected) {
+      replaceElement.replaceWith(div);
+    } else {
+      this.container.appendChild(div);
+    }
+    if (!isHistory) this.scrollToBottom();
+    return div;
+  }
+
+  formatAssistantError(message) {
+    const value = message?.errorMessage ?? message?.error_message ?? message?.error ?? '';
+    const raw = typeof value === 'string' ? value.trim() : JSON.stringify(value, null, 2);
+    const statusMatch = raw.match(/^(\d{3})\s*:\s*([\s\S]*)$/);
+    const status = statusMatch?.[1] || '';
+    const payloadText = statusMatch?.[2] || raw;
+    let payload = null;
+
+    try {
+      payload = payloadText ? JSON.parse(payloadText) : null;
+    } catch {
+      payload = null;
+    }
+
+    const code = payload?.code || message?.errorCode || message?.error_code || '';
+    const providerMessage = payload?.message || (payload ? '' : payloadText) || '模型服务未返回具体错误信息。';
+    let title = '模型响应失败';
+    let summary = providerMessage;
+
+    if (code === 'system_cpu_overloaded') {
+      title = '模型服务繁忙';
+      summary = '模型服务当前负载过高，请稍后重试。';
+    } else if (code === 'model_not_found') {
+      title = '当前模型不可用';
+    } else if (/rate.?limit|too_many_requests/i.test(code) || status === '429') {
+      title = '请求过于频繁';
+      summary = '模型服务已限制请求频率，请稍后重试。';
+    } else if (/context|token.*limit/i.test(code)) {
+      title = '上下文超出限制';
+    } else if (/auth|unauthorized|invalid.?key/i.test(code) || status === '401' || status === '403') {
+      title = '模型服务认证失败';
+    } else if (status === '503') {
+      title = '模型服务暂不可用';
+    }
+
+    const details = [
+      status ? `HTTP 状态：${status}` : '',
+      code ? `错误代码：${code}` : '',
+      raw && raw !== summary ? `原始信息：${raw}` : '',
+    ].filter(Boolean).join('\n');
+
+    return { title, summary, details };
+  }
+
   renderThinkingBlock(thinking) {
     const id = 'thinking-' + Math.random().toString(36).slice(2, 8);
     return `<div class="thinking-block">
 <div class="thinking-toggle" onclick="var c=document.getElementById('${id}');c.classList.toggle('expanded');this.classList.toggle('expanded')">
 <span class="chevron"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg></span>
-<span class="thinking-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg> Thinking</span>
+<span class="thinking-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg> 思考过程</span>
 </div>
 <div class="thinking-content" id="${id}">${this.escapeHtml(thinking)}</div>
 </div>`;
@@ -148,7 +240,7 @@ export class MessageRenderer {
       thinkingDiv.innerHTML = `
         <div class="thinking-toggle expanded" onclick="var c=this.nextElementSibling;c.classList.toggle('expanded');this.classList.toggle('expanded')">
           <span class="chevron"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg></span>
-          <span class="thinking-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg> Thinking</span>
+          <span class="thinking-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg> 思考过程</span>
         </div>
         <div class="thinking-content expanded"></div>`;
       contentDiv.prepend(thinkingDiv);
@@ -186,10 +278,23 @@ export class MessageRenderer {
     const contentDiv = messageElement.querySelector('.message-content');
     if (contentDiv) {
       contentDiv.classList.remove('streaming');
-      // Get the raw text (exclude thinking block text)
+      // Read only the assistant text. A thinking-only update must not leak its
+      // disclosure label/content into the visible answer body.
       const streamingText = contentDiv.querySelector('.streaming-text');
-      const rawText = streamingText ? streamingText.textContent : contentDiv.textContent;
-      
+      let rawText = streamingText?.textContent || '';
+      if (!streamingText) {
+        const textOnly = contentDiv.cloneNode(true);
+        textOnly.querySelector('.streaming-thinking')?.remove();
+        rawText = textOnly.textContent || '';
+      }
+
+      // Tool-only and aborted empty assistant turns may still emit a message
+      // boundary. Do not leave an empty row or a misleading 0-token receipt.
+      if (!rawText.trim() && !String(thinking || '').trim()) {
+        messageElement.remove();
+        return false;
+      }
+
       // Rebuild with thinking block (if any) + markdown text
       let html = '';
       if (thinking) {
@@ -205,13 +310,14 @@ export class MessageRenderer {
     if (!messageElement.querySelector('.message-copy-btn')) {
       const btn = document.createElement('button');
       btn.className = 'message-copy-btn';
+      btn.setAttribute('aria-label', '复制消息');
       btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
       messageElement.appendChild(btn);
       this._setupCopyBtn(messageElement);
     }
 
     // Add usage info if available
-    if (usage) {
+    if (this.hasMeaningfulUsage(usage)) {
       if (!messageElement.querySelector('.message-usage')) {
         const span = document.createElement('span');
         span.className = 'message-usage';
@@ -220,13 +326,27 @@ export class MessageRenderer {
         messageElement.appendChild(span);
       }
     }
+    return true;
   }
 
   formatUsageHtml(usage) {
-    if (!usage) return '';
+    if (!this.hasMeaningfulUsage(usage)) return '';
     const text = this.escapeHtml(this.formatUsageTextCn(usage));
     const title = this.escapeHtml(this.formatUsageTitleCn(usage));
     return `<span class="message-usage" title="${title}">${text}</span>`;
+  }
+
+  hasMeaningfulUsage(usage) {
+    if (!usage) return false;
+    return [
+      usage.input,
+      usage.output,
+      usage.cacheRead,
+      usage.cacheWrite,
+      usage.reasoning,
+      usage.totalTokens,
+      usage.cost?.total,
+    ].some((value) => Number(value || 0) > 0);
   }
 
   formatUsageText(usage) {

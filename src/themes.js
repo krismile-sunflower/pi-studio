@@ -1,71 +1,61 @@
 /**
- * Theme system — four themes: two light, two dark
+ * pi-studio theme system — one light and one dark palette.
  */
 
+const LEGACY_THEME_MAP = {
+  night: 'dark',
+  dawn: 'dark',
+  midnight: 'dark',
+  clean: 'light',
+  terracotta: 'light',
+  sage: 'light',
+};
+
 export const themes = {
-  night: {
-    name: 'Dusk',
+  dark: {
+    name: '深色',
     dark: true,
-    colors: ['#212121', '#a0a0a0', '#777777', '#666666'],
-    vars: {},
+    colors: ['#0f1115', '#171a21', '#6d7cff', '#43d39e'],
   },
-  dawn: {
-    name: 'Dawn',
-    dark: true,
-    colors: ['#1a1d26', '#7a8ab0', '#6a5a80', '#5a7a9a'],
-    vars: {},
-  },
-  midnight: {
-    name: 'Midnight',
-    dark: true,
-    colors: ['#000000', '#5a7a9a', '#4a5565', '#4a5a72'],
-    vars: {},
-  },
-  clean: {
-    name: 'Clean',
+  light: {
+    name: '浅色',
     dark: false,
-    colors: ['#ffffff', '#0580c4', '#007aff', '#5ac8fa'],
-    vars: {},
-  },
-  terracotta: {
-    name: 'Terracotta',
-    dark: false,
-    colors: ['#f4f1ec', '#b06a48', '#5c2860', '#3a6a9b'],
-    vars: {},
-  },
-  sage: {
-    name: 'Sage',
-    dark: false,
-    colors: ['#f0f2ec', '#6a7d5a', '#4a3860', '#3a6a7a'],
-    vars: {},
+    colors: ['#f6f7f9', '#ffffff', '#5968e8', '#43b889'],
   },
 };
 
-export function applyTheme(themeId) {
-  const root = document.documentElement;
-  // Validate
-  if (!themes[themeId]) themeId = 'night';
-  root.setAttribute('data-theme', themeId);
-  localStorage.setItem('tau-theme', themeId);
+function normalizeTheme(themeId) {
+  return LEGACY_THEME_MAP[themeId] || (themes[themeId] ? themeId : null);
+}
+
+function updateThemeColor(themeId) {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = themeId === 'light' ? '#f6f7f9' : '#0f1115';
+}
+
+export function applyTheme(themeId, { persist = true } = {}) {
+  const normalized = normalizeTheme(themeId) || 'dark';
+  document.documentElement.setAttribute('data-theme', normalized);
+  if (persist) localStorage.setItem('tau-theme', normalized);
+  updateThemeColor(normalized);
+  return normalized;
 }
 
 export function getCurrentTheme() {
   const saved = localStorage.getItem('tau-theme');
-  // Migrate old values
-  if (saved === 'dark') return 'night';
-  if (saved === 'light') return 'terracotta';
-  if (saved && themes[saved]) return saved;
-  // Auto-detect from OS
-  if (window.matchMedia?.('(prefers-color-scheme: light)').matches) return 'terracotta';
-  return 'night';
+  const normalized = normalizeTheme(saved);
+  if (normalized) {
+    if (saved !== normalized) localStorage.setItem('tau-theme', normalized);
+    return normalized;
+  }
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
-// Listen for OS theme changes if no explicit preference saved
 if (!localStorage.getItem('tau-theme')) {
-  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
-    if (!localStorage.getItem('tau-theme')) {
-      const root = document.documentElement;
-      root.setAttribute('data-theme', e.matches ? 'terracotta' : 'night');
-    }
+  window.matchMedia?.('(prefers-color-scheme: light)').addEventListener('change', (event) => {
+    if (localStorage.getItem('tau-theme')) return;
+    const themeId = event.matches ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', themeId);
+    updateThemeColor(themeId);
   });
 }

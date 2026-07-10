@@ -46,7 +46,18 @@ const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
+const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
+const appLayout = document.getElementById('app-layout');
+const sidebarResizer = document.getElementById('sidebar-resizer');
+const fileResizer = document.getElementById('file-resizer');
+const fileSidebarOverlay = document.getElementById('file-sidebar-overlay');
+const projectSwitcher = document.getElementById('project-switcher');
+const projectSwitcherName = document.getElementById('project-switcher-name');
+const projectSwitcherPath = document.getElementById('project-switcher-path');
+const headerWorkspaceName = document.getElementById('header-workspace-name');
+const headerSessionTitle = document.getElementById('header-session-title');
+const toastRegion = document.getElementById('toast-region');
 
 const refreshSessionsBtn = document.getElementById('refresh-sessions-btn');
 const sessionSearchInput = document.getElementById('session-search-input');
@@ -57,6 +68,8 @@ const tokenUsageEl = document.getElementById('token-usage');
 const scrollBottomBtn = document.getElementById('scroll-bottom-btn');
 const scrollBottomBadge = document.getElementById('scroll-bottom-badge');
 const messagesContainer = document.getElementById('messages');
+const inputArea = document.querySelector('.input-area');
+const launcherEl = document.getElementById('launcher');
 const workspaceChip = document.getElementById('workspace-chip');
 const workspaceName = document.getElementById('workspace-name');
 const workspacePath = document.getElementById('workspace-path');
@@ -87,6 +100,23 @@ let desktopHasActivePiSession = Boolean(desktopInstanceId || desktopPort);
 let sessionRefreshTimer = null;
 let currentWorkspace = { path: '', noFolder: false };
 
+function showToast({ title = '', message = '', type = 'info', duration = 3600 } = {}) {
+  if (!toastRegion) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  const icons = { success: '✓', error: '!', warning: '△', info: 'i' };
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || icons.info}</span>
+    <span><span class="toast-title">${escapeHtml(title || '提示')}</span>${message ? `<span class="toast-message">${escapeHtml(message)}</span>` : ''}</span>
+    <button class="toast-close" type="button" aria-label="关闭通知">×</button>`;
+  const remove = () => toast.remove();
+  toast.querySelector('.toast-close')?.addEventListener('click', remove);
+  toastRegion.appendChild(toast);
+  if (duration > 0) setTimeout(remove, duration);
+}
+
+window.addEventListener('pi-studio:toast', (event) => showToast(event.detail || {}));
+
 // File browser
 const fileSidebar = document.getElementById('file-sidebar');
 const fileSidebarToggle = document.getElementById('file-sidebar-toggle');
@@ -101,28 +131,35 @@ const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, (fi
   renderAttachmentPreviews();
 });
 
-fileSidebarToggle.addEventListener('click', () => {
-  const isCollapsed = fileSidebar.classList.toggle('collapsed');
-  if (!isCollapsed && !fileBrowser.currentPath) {
-    fileBrowser.load(); // Load session cwd
+function setFileSidebarOpen(open) {
+  fileSidebar.classList.toggle('collapsed', !open);
+  fileSidebarOverlay?.classList.toggle('visible', open && window.innerWidth <= 960);
+  fileSidebarToggle.classList.toggle('active', open);
+  fileSidebarToggle.setAttribute('aria-expanded', String(open));
+  localStorage.setItem('tau-file-sidebar', open ? 'open' : 'closed');
+  if (open && currentWorkspace.path && fileBrowser.rootPath !== currentWorkspace.path) {
+    fileBrowser.setRoot(currentWorkspace.path);
+  } else if (open && fileBrowser.rootPath && !fileBrowser.childrenCache.has(fileBrowser.rootPath)) {
+    fileBrowser.load();
   }
-  localStorage.setItem('tau-file-sidebar', isCollapsed ? 'closed' : 'open');
-});
+}
 
-fileSidebarClose.addEventListener('click', () => {
-  fileSidebar.classList.add('collapsed');
-  localStorage.setItem('tau-file-sidebar', 'closed');
-});
+function toggleFileSidebar() {
+  setFileSidebarOpen(fileSidebar.classList.contains('collapsed'));
+}
+
+fileSidebarToggle.addEventListener('click', toggleFileSidebar);
+fileSidebarClose.addEventListener('click', () => setFileSidebarOpen(false));
+fileSidebarOverlay?.addEventListener('click', () => setFileSidebarOpen(false));
 
 fileSidebarUp.addEventListener('click', () => {
-  const parent = fileBrowser.getParentPath();
-  if (parent) fileBrowser.load(parent);
+  fileBrowser.collapseAll();
 });
 
 fetch('/api/health').then(r => r.json()).then(data => {
-  const names = { win32: 'Explorer', darwin: 'Finder', linux: 'file manager' };
-  const name = names[data.platform] || 'file manager';
-  document.getElementById('file-sidebar-finder').title = `Open in ${name}`;
+  const names = { win32: '资源管理器', darwin: '访达', linux: '文件管理器' };
+  const name = names[data.platform] || '文件管理器';
+  document.getElementById('file-sidebar-finder').title = `在${name}中打开`;
 }).catch(() => {});
 
 document.getElementById('file-sidebar-finder').addEventListener('click', () => {
@@ -137,9 +174,56 @@ document.getElementById('file-sidebar-finder').addEventListener('click', () => {
 
 // Restore file sidebar state
 if (localStorage.getItem('tau-file-sidebar') === 'open') {
-  fileSidebar.classList.remove('collapsed');
-  fileBrowser.load();
+  setFileSidebarOpen(true);
 }
+
+function clampPanelWidth(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function setupPanelResize({ handle, cssVariable, storageKey, min, max, fallback, direction = 1 }) {
+  if (!handle) return;
+  const stored = clampPanelWidth(localStorage.getItem(storageKey), min, max, fallback);
+  document.documentElement.style.setProperty(cssVariable, `${stored}px`);
+  handle.setAttribute('aria-valuemin', String(min));
+  handle.setAttribute('aria-valuemax', String(max));
+  handle.setAttribute('aria-valuenow', String(stored));
+
+  handle.addEventListener('dblclick', () => {
+    document.documentElement.style.setProperty(cssVariable, `${fallback}px`);
+    localStorage.setItem(storageKey, String(fallback));
+    handle.setAttribute('aria-valuenow', String(fallback));
+  });
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startWidth = clampPanelWidth(getComputedStyle(document.documentElement).getPropertyValue(cssVariable), min, max, fallback);
+    document.body.classList.add('is-resizing');
+    handle.setPointerCapture?.(event.pointerId);
+
+    const move = (moveEvent) => {
+      const width = clampPanelWidth(startWidth + ((moveEvent.clientX - startX) * direction), min, max, fallback);
+      document.documentElement.style.setProperty(cssVariable, `${width}px`);
+      handle.setAttribute('aria-valuenow', String(width));
+    };
+    const end = () => {
+      const width = clampPanelWidth(getComputedStyle(document.documentElement).getPropertyValue(cssVariable), min, max, fallback);
+      localStorage.setItem(storageKey, String(width));
+      document.body.classList.remove('is-resizing');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  });
+}
+
+setupPanelResize({ handle: sidebarResizer, cssVariable: '--sidebar-width', storageKey: 'pi-studio-sidebar-width', min: 240, max: 360, fallback: 288 });
+setupPanelResize({ handle: fileResizer, cssVariable: '--file-sidebar-width', storageKey: 'pi-studio-file-width', min: 240, max: 420, fallback: 300, direction: -1 });
 
 
 // ═══════════════════════════════════════
@@ -180,7 +264,7 @@ messagesContainer.addEventListener('scroll', () => {
   const threshold = 150;
   const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
   isScrolledUp = !atBottom;
-  
+
   if (atBottom) {
     scrollBottomBtn.classList.add('hidden');
     scrollBottomBadge.classList.add('hidden');
@@ -225,7 +309,7 @@ wsClient.addEventListener('disconnected', () => {
 
 wsClient.addEventListener('reconnectFailed', () => {
   updateConnectionStatus('disconnected');
-  messageRenderer.renderError('Connection lost. Please refresh the page.');
+  messageRenderer.renderError('连接已断开，请刷新页面后重试。');
 });
 
 wsClient.addEventListener('rpcEvent', (e) => {
@@ -293,7 +377,7 @@ function handleRPCEvent(event) {
       handleExtensionUIRequest(event);
       break;
     case 'extension_error':
-      messageRenderer.renderError(`Extension error: ${event.error}`);
+      messageRenderer.renderError(`扩展执行错误：${event.error}`);
       break;
     case 'session_name':
       // Auto-title: update sidebar with new session name
@@ -309,7 +393,7 @@ function handleCompactionStart() {
   const el = document.createElement('div');
   el.className = 'system-message compaction-message';
   el.id = 'compaction-indicator';
-  el.innerHTML = '<span class="compaction-spinner">⟳</span> Compacting context…';
+  el.innerHTML = '<span class="compaction-spinner">⟳</span> 正在压缩上下文…';
   messagesContainer.appendChild(el);
   scrollToBottom();
 }
@@ -318,7 +402,7 @@ function handleCompactionEnd(event) {
   const indicator = document.getElementById('compaction-indicator');
   if (indicator) {
     const summary = event.summary ? ` — ${event.summary}` : '';
-    indicator.innerHTML = `✓ Context compacted${summary}`;
+    indicator.innerHTML = `✓ 上下文已压缩${summary}`;
     indicator.classList.add('compaction-done');
   }
   // Reset token tracking — next message will update
@@ -339,8 +423,16 @@ function handleAgentStart() {
 function handleAgentEnd() {
   state.setStreaming(false);
   showTypingIndicator(false);
+  if (currentStreamingElement) {
+    messageRenderer.finalizeStreamingMessage(
+      currentStreamingElement,
+      null,
+      currentStreamingThinking
+    );
+  }
   currentStreamingElement = null;
   currentStreamingText = '';
+  currentStreamingThinking = '';
   pendingLocalPrompts = [];
   updateUI();
 
@@ -465,10 +557,21 @@ function handleMessageUpdate(event) {
 }
 
 function handleMessageEnd(message) {
+  const hasAssistantError = messageRenderer.hasAssistantError(message);
+
   if (message?.role === 'assistant' && !currentStreamingElement) {
-    messageRenderer.renderAssistantMessage(message, false);
+    const hasVisibleContent = Boolean(
+      normalizeMessageText(getMessageText(message)) ||
+      normalizeMessageText(getMessageThinking(message))
+    );
+    if (hasAssistantError) {
+      messageRenderer.renderAssistantError(message);
+      showNewMessageBadge();
+    } else if (hasVisibleContent) {
+      messageRenderer.renderAssistantMessage(message, false);
+      showNewMessageBadge();
+    }
     rememberAssistantUsage(message?.usage || null);
-    showNewMessageBadge();
     refreshSessionsSoon(800);
     return;
   }
@@ -476,6 +579,17 @@ function handleMessageEnd(message) {
   if (currentStreamingElement) {
     // Pass usage info for cost display
     const usage = message?.usage || null;
+    if (hasAssistantError) {
+      messageRenderer.renderAssistantError(message, false, currentStreamingElement);
+      currentStreamingElement = null;
+      currentStreamingText = '';
+      currentStreamingThinking = '';
+      rememberAssistantUsage(usage);
+      showNewMessageBadge();
+      refreshSessionsSoon(800);
+      return;
+    }
+
     currentStreamingText = getMessageText(message) || currentStreamingText;
     currentStreamingThinking = getMessageThinking(message) || currentStreamingThinking;
     if (currentStreamingText) {
@@ -589,7 +703,7 @@ messageInput.addEventListener('keydown', (e) => {
 // Auto-resize textarea
 messageInput.addEventListener('input', () => {
   messageInput.style.height = 'auto';
-  messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
+  messageInput.style.height = Math.min(messageInput.scrollHeight, 132) + 'px';
 });
 
 // ═══════════════════════════════════════
@@ -685,7 +799,7 @@ messageInput.addEventListener('paste', (e) => {
 function makeRemoveBtn(onClick) {
   const btn = document.createElement('button');
   btn.className = 'image-preview-remove';
-  btn.setAttribute('aria-label', 'Remove');
+  btn.setAttribute('aria-label', '移除附件');
   btn.textContent = '✕';
   btn.addEventListener('click', onClick);
   return btn;
@@ -810,7 +924,7 @@ async function sendMessage() {
   messageInput.value = '';
   messageInput.style.height = 'auto';
 
-  const cmd = { type: 'prompt', message: message || '(see attached image)' };
+  const cmd = { type: 'prompt', message: message || '（请查看附图）' };
 
   if (pendingImages.length > 0) {
     cmd.images = pendingImages.map(img => {
@@ -842,7 +956,7 @@ async function sendMessage() {
     await sendPromptCommand(cmd);
   } catch (error) {
     pendingLocalPrompts = pendingLocalPrompts.filter(prompt => prompt.message !== message);
-    messageRenderer.renderError(`Send failed: ${error}`);
+    messageRenderer.renderError(`发送失败：${error}`);
     wsClient.forceReconnect();
   }
 }
@@ -860,9 +974,9 @@ function renderQueuedMessages() {
     const el = document.createElement('div');
     el.className = 'queued-msg';
     el.innerHTML = `
-      <span class="queued-msg-label">Queued</span>
+      <span class="queued-msg-label">排队中</span>
       <span class="queued-msg-text">${escapeHtml(cmd.message)}</span>
-      <button class="queued-msg-cancel" title="Cancel">×</button>
+      <button class="queued-msg-cancel" title="取消排队">×</button>
     `;
     el.querySelector('.queued-msg-cancel').addEventListener('click', () => {
       messageQueue.splice(i, 1);
@@ -892,7 +1006,7 @@ async function flushQueue() {
       await sendPromptCommand(cmd);
     } catch (error) {
       pendingLocalPrompts = pendingLocalPrompts.filter(prompt => prompt.message !== cmd.message);
-      messageRenderer.renderError(`Send failed: ${error}`);
+      messageRenderer.renderError(`发送失败：${error}`);
       wsClient.forceReconnect();
     }
   }
@@ -900,7 +1014,7 @@ async function flushQueue() {
 
 abortBtn.addEventListener('click', () => {
   rpcCommand({ type: 'abort' }).catch(() => wsClient.send({ type: 'abort' }));
-  messageRenderer.renderError('Aborted by user');
+  messageRenderer.renderError('已停止生成');
   showTypingIndicator(false);
 });
 
@@ -912,36 +1026,68 @@ const commandBtn = document.getElementById('command-btn');
 const commandPalette = document.getElementById('command-palette');
 const commandPaletteOverlay = document.getElementById('command-palette-overlay');
 const commandList = document.getElementById('command-list');
+const commandSearch = document.getElementById('command-search');
 
 const commands = [
-  { icon: '🗜️', label: 'Compact', desc: 'Compact context to save tokens', action: () => rpcCommand({ type: 'compact' }, 'Compacting...') },
-  { icon: '📋', label: 'Export HTML', desc: 'Export session as HTML file', action: () => rpcExportHtml() },
-  { icon: '📊', label: 'Session Stats', desc: 'Show session statistics', action: () => showSessionStats() },
-  { icon: '⬇️', label: 'Expand All Tools', desc: 'Expand all tool cards', action: () => toolCardRenderer.expandAll() },
-  { icon: '⬆️', label: 'Collapse All Tools', desc: 'Collapse all tool cards', action: () => toolCardRenderer.collapseAll() },
-
+  { icon: '+', label: '新建会话', desc: '在当前工作区创建一个新会话', shortcut: '⌘N', keywords: 'new session', action: () => newSession() },
+  { icon: '⌘', label: '压缩上下文', desc: '压缩当前会话以节省上下文空间', keywords: 'compact context', action: () => rpcCommand({ type: 'compact' }, '正在压缩上下文…') },
+  { icon: '⇧', label: '导出 HTML', desc: '将当前会话导出为 HTML 文件', keywords: 'export html', action: () => rpcExportHtml() },
+  { icon: '◫', label: '会话统计', desc: '显示消息、工具调用和 Token 统计', keywords: 'stats token', action: () => showSessionStats() },
+  { icon: '▦', label: '展开全部工具', desc: '展开消息中的所有工具执行卡片', keywords: 'expand tools', action: () => toolCardRenderer.expandAll() },
+  { icon: '▤', label: '折叠全部工具', desc: '折叠消息中的所有工具执行卡片', keywords: 'collapse tools', action: () => toolCardRenderer.collapseAll() },
+  { icon: '◧', label: '切换会话栏', desc: '显示或隐藏左侧会话栏', shortcut: '⌘B', keywords: 'sidebar', action: () => toggleSidebar() },
+  { icon: '◇', label: '切换文件栏', desc: '显示或隐藏当前工作区文件', shortcut: '⌘⇧F', keywords: 'files', action: () => toggleFileSidebar() },
+  { icon: '▦', label: '打开项目', desc: '查看并切换工作区项目', keywords: 'projects workspace', action: () => showLauncher() },
+  { icon: '⚙', label: '打开设置', desc: '管理外观、运行时和桌面行为', keywords: 'settings preferences', action: () => openSettings() },
 ];
 
-function openCommandPalette() {
-  commandList.innerHTML = '';
-  commands.forEach(cmd => {
-    const el = document.createElement('div');
-    el.className = 'command-item';
-    el.innerHTML = `
-      <div class="command-icon">${cmd.icon}</div>
-      <div>
-        <div class="command-label">${cmd.label}</div>
-        <div class="command-desc">${cmd.desc}</div>
-      </div>
-    `;
-    el.addEventListener('click', () => {
-      closeCommandPalette();
-      cmd.action();
-    });
-    commandList.appendChild(el);
+let visibleCommands = [...commands];
+let selectedCommandIndex = 0;
+
+function renderCommandList(filter = '') {
+  const query = filter.trim().toLowerCase();
+  visibleCommands = commands.filter(command => {
+    if (!query) return true;
+    return `${command.label} ${command.desc} ${command.keywords || ''}`.toLowerCase().includes(query);
   });
+  selectedCommandIndex = Math.min(selectedCommandIndex, Math.max(0, visibleCommands.length - 1));
+  commandList.innerHTML = '';
+  if (visibleCommands.length === 0) {
+    commandList.innerHTML = '<div class="command-empty">没有匹配的命令</div>';
+    return;
+  }
+
+  visibleCommands.forEach((command, index) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `command-item${index === selectedCommandIndex ? ' active' : ''}`;
+    item.innerHTML = `
+      <span class="command-icon">${command.icon}</span>
+      <span><span class="command-label">${command.label}</span><span class="command-desc">${command.desc}</span></span>
+      ${command.shortcut ? `<kbd class="command-shortcut">${command.shortcut}</kbd>` : '<span></span>'}`;
+    item.addEventListener('mouseenter', () => {
+      selectedCommandIndex = index;
+      commandList.querySelectorAll('.command-item').forEach((element, itemIndex) => element.classList.toggle('active', itemIndex === index));
+    });
+    item.addEventListener('click', () => runSelectedCommand(index));
+    commandList.appendChild(item);
+  });
+}
+
+function runSelectedCommand(index = selectedCommandIndex) {
+  const command = visibleCommands[index];
+  if (!command) return;
+  closeCommandPalette();
+  Promise.resolve(command.action()).catch(error => showToast({ title: '命令执行失败', message: String(error), type: 'error' }));
+}
+
+function openCommandPalette() {
+  commandSearch.value = '';
+  selectedCommandIndex = 0;
+  renderCommandList();
   commandPalette.classList.remove('hidden');
   commandPaletteOverlay.classList.remove('hidden');
+  requestAnimationFrame(() => commandSearch.focus());
 }
 
 function closeCommandPalette() {
@@ -951,6 +1097,24 @@ function closeCommandPalette() {
 
 commandBtn.addEventListener('click', openCommandPalette);
 commandPaletteOverlay.addEventListener('click', closeCommandPalette);
+commandSearch.addEventListener('input', () => {
+  selectedCommandIndex = 0;
+  renderCommandList(commandSearch.value);
+});
+commandSearch.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    selectedCommandIndex = Math.min(visibleCommands.length - 1, selectedCommandIndex + 1);
+    renderCommandList(commandSearch.value);
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    selectedCommandIndex = Math.max(0, selectedCommandIndex - 1);
+    renderCommandList(commandSearch.value);
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    runSelectedCommand();
+  }
+});
 
 async function rpcCommand(cmd, statusMsg) {
   try {
@@ -971,40 +1135,42 @@ async function rpcCommand(cmd, statusMsg) {
       data.error = `HTTP ${resp.status}`;
     }
     if (data.success) {
-      statusText.textContent = 'Done';
-      setTimeout(() => { statusText.textContent = 'Connected'; }, 2000);
+      statusText.textContent = '已完成';
+      if (statusMsg) showToast({ title: '操作完成', message: statusMsg.replace(/[…\.]+$/, ''), type: 'success', duration: 2200 });
+      setTimeout(() => updateConnectionStatus(desktopHasActivePiSession ? 'connected' : 'idle'), 1600);
     } else {
-      statusText.textContent = data.error || 'Failed';
-      setTimeout(() => { statusText.textContent = 'Connected'; }, 3000);
+      statusText.textContent = data.error || '操作失败';
+      showToast({ title: '操作失败', message: data.error || 'Pi 未返回成功结果', type: 'error' });
+      setTimeout(() => updateConnectionStatus(desktopHasActivePiSession ? 'connected' : 'idle'), 2600);
     }
     return data;
   } catch (e) {
     const message = e?.message || String(e);
-    statusText.textContent = 'Error';
-    setTimeout(() => { statusText.textContent = 'Connected'; }, 3000);
+    statusText.textContent = '发生错误';
+    showToast({ title: '操作失败', message, type: 'error' });
+    setTimeout(() => updateConnectionStatus(desktopHasActivePiSession ? 'connected' : 'idle'), 2600);
     return { success: false, error: message };
   }
 }
 
 async function rpcExportHtml() {
-  const data = await rpcCommand({ type: 'export_html' }, 'Exporting...');
+  const data = await rpcCommand({ type: 'export_html' }, '正在导出会话…');
   if (data?.success && data.data?.path) {
-    statusText.textContent = `Exported: ${data.data.path}`;
-    setTimeout(() => { statusText.textContent = 'Connected'; }, 4000);
+    showToast({ title: '会话已导出', message: data.data.path, type: 'success', duration: 5000 });
   }
 }
 
 async function showSessionStats() {
-  const data = await rpcCommand({ type: 'get_session_stats' }, 'Loading stats...');
+  const data = await rpcCommand({ type: 'get_session_stats' }, '正在读取会话统计…');
   if (data?.success && data.data) {
     const s = data.data;
     const lines = [
-      `📊 Session Stats`,
-      `Messages: ${s.totalMessages} (${s.userMessages} user, ${s.assistantMessages} assistant)`,
-      `Tool calls: ${s.toolCalls}`,
+      `会话统计`,
+      `消息：${s.totalMessages} 条（用户 ${s.userMessages}，助手 ${s.assistantMessages}）`,
+      `工具调用：${s.toolCalls} 次`,
     ];
     if (s.tokens) {
-      lines.push(`Context: ~${(s.tokens.input / 1000).toFixed(1)}k tokens`);
+      lines.push(`上下文：约 ${(s.tokens.input / 1000).toFixed(1)}k Token`);
     }
     messageRenderer.renderSystemMessage(lines.join('\n'));
   }
@@ -1019,19 +1185,22 @@ const modelDropdownBtn = document.getElementById('model-dropdown-btn');
 const modelDropdownLabel = document.getElementById('model-dropdown-label');
 const modelDropdownMenu = document.getElementById('model-dropdown-menu');
 const thinkingBtn = document.getElementById('thinking-btn');
+const THINKING_LEVEL_LABELS = {
+  off: '关闭', minimal: '极简', low: '较低', medium: '中等', high: '较高', xhigh: '最高', max: '最高'
+};
 function updateThinkingBtn() {
-  const label = thinkingLevelSupported ? `think ${currentThinkingLevel}` : 'think n/a';
-  thinkingBtn.textContent = label;
+  const levelLabel = THINKING_LEVEL_LABELS[currentThinkingLevel] || currentThinkingLevel || '关闭';
+  thinkingBtn.textContent = thinkingLevelSupported ? `思考：${levelLabel}` : '思考：不可用';
   thinkingBtn.classList.toggle('off', currentThinkingLevel === 'off' || !thinkingLevelSupported);
   thinkingBtn.classList.toggle('unsupported', !thinkingLevelSupported);
   thinkingBtn.disabled = !thinkingLevelSupported;
   thinkingBtn.title = thinkingLevelSupported
-    ? 'Thinking level for new replies. Use Settings > Show thinking to hide reasoning blocks.'
-    : 'This model does not expose Pi thinking levels. Use Settings > Show thinking to hide reasoning blocks.';
+    ? '切换新回复的思考级别；可在设置中隐藏思考过程。'
+    : '当前模型不支持 Pi 思考级别。';
 
   const settingsThinkingBtn = document.getElementById('btn-thinking-level');
   if (settingsThinkingBtn) {
-    settingsThinkingBtn.textContent = thinkingLevelSupported ? currentThinkingLevel : 'n/a';
+    settingsThinkingBtn.textContent = thinkingLevelSupported ? levelLabel : '不可用';
     settingsThinkingBtn.disabled = !thinkingLevelSupported;
     settingsThinkingBtn.title = thinkingBtn.title;
   }
@@ -1110,7 +1279,7 @@ function applyThinkingLevelResponse(data) {
 
 function updateModelLabel() {
   const shortName = currentModelId.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-  modelDropdownLabel.textContent = shortName || (modelInfoLoaded ? 'No model' : 'model');
+  modelDropdownLabel.textContent = shortName || (modelInfoLoaded ? '未选择模型' : '模型');
 }
 
 function toggleModelDropdown() {
@@ -1122,82 +1291,173 @@ function toggleModelDropdown() {
   }
 }
 
+function positionModelDropdown() {
+  if (modelDropdownMenu.classList.contains('hidden')) return;
+  const buttonRect = modelDropdownBtn.getBoundingClientRect();
+  const dropdownRect = modelDropdown.getBoundingClientRect();
+  const mainRect = document.querySelector('.main')?.getBoundingClientRect() || { left: 0, right: window.innerWidth, width: window.innerWidth };
+  const width = Math.min(360, Math.max(120, mainRect.width - 24));
+  const left = Math.max(mainRect.left + 12, Math.min(buttonRect.right - width, mainRect.right - width - 12));
+  modelDropdownMenu.style.width = `${width}px`;
+  modelDropdownMenu.style.left = `${left - dropdownRect.left}px`;
+  modelDropdownMenu.style.top = `${buttonRect.bottom - dropdownRect.top + 8}px`;
+}
+
 function openModelDropdown() {
   modelDropdownMenu.innerHTML = '';
+  modelDropdownMenu.setAttribute('role', 'listbox');
+  modelDropdownMenu.setAttribute('aria-label', '选择模型');
+  modelDropdownBtn.setAttribute('aria-expanded', 'true');
 
-  // Search input
   const search = document.createElement('input');
   search.className = 'model-dropdown-search';
-  search.placeholder = 'Search models…';
-  search.type = 'text';
+  search.placeholder = '搜索模型…';
+  search.type = 'search';
+  search.setAttribute('aria-label', '搜索模型');
   modelDropdownMenu.appendChild(search);
 
-  // Items container
   const itemsContainer = document.createElement('div');
   itemsContainer.className = 'model-dropdown-items';
   modelDropdownMenu.appendChild(itemsContainer);
+  let activeIndex = -1;
+
+  function optionElements() {
+    return [...itemsContainer.querySelectorAll('.model-dropdown-item:not(.empty)')];
+  }
+
+  function setActiveIndex(index, scroll = true) {
+    const options = optionElements();
+    if (options.length === 0) {
+      activeIndex = -1;
+      return;
+    }
+    activeIndex = Math.max(0, Math.min(index, options.length - 1));
+    options.forEach((option, optionIndex) => {
+      option.classList.toggle('keyboard-active', optionIndex === activeIndex);
+      option.setAttribute('aria-selected', String(optionIndex === activeIndex));
+    });
+    if (scroll) options[activeIndex].scrollIntoView({ block: 'nearest' });
+  }
+
+  async function selectModel(model) {
+    closeModelDropdown();
+    const display = model.id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+    const data = await rpcCommand(
+      { type: 'set_model', provider: model.provider, modelId: model.id },
+      `正在切换到 ${display}…`
+    );
+    currentModelId = model.id;
+    const selectedModel = data?.data?.model || data?.data || model;
+    thinkingLevelSupported = modelSupportsThinkingLevel(selectedModel);
+    if (data?.data?.thinkingLevel) currentThinkingLevel = data.data.thinkingLevel;
+    updateThinkingBtn();
+    updateModelLabel();
+    const contextWindow = model.contextWindow || model.context_window;
+    if (contextWindow) {
+      contextWindowSize = contextWindow;
+      updateTokenUsage();
+    }
+  }
 
   function renderItems(filter) {
     itemsContainer.innerHTML = '';
-    const query = (filter || '').toLowerCase();
+    const query = (filter || '').trim().toLowerCase();
     if (availableModels.length === 0) {
       const empty = document.createElement('div');
-      empty.className = 'model-dropdown-item';
-      empty.textContent = 'No models found';
+      empty.className = 'model-dropdown-item empty';
+      empty.textContent = '没有可用模型';
       itemsContainer.appendChild(empty);
+      activeIndex = -1;
       return;
     }
-    availableModels.forEach(m => {
-      const shortName = m.id.replace(/-\d{8}$/, '');
-      const providerStr = m.provider || '';
-      if (query && !shortName.toLowerCase().includes(query) && !providerStr.toLowerCase().includes(query)) return;
 
-      const el = document.createElement('div');
-      el.className = `model-dropdown-item${m.id === currentModelId ? ' active' : ''}`;
-      const ctxK = m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}k` : '';
-      const providerLabel = m.provider && m.provider !== 'anthropic' ? `<span class="model-dropdown-item-provider">${m.provider}</span>` : '';
-      el.innerHTML = `<span>${shortName}${providerLabel}</span><span class="model-dropdown-item-ctx">${ctxK}</span>`;
-      el.addEventListener('click', async () => {
-        closeModelDropdown();
-      const display = m.id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-      const data = await rpcCommand({ type: 'set_model', provider: m.provider, modelId: m.id }, `Switching to ${display}...`);
-      currentModelId = m.id;
-      const selectedModel = data?.data?.model || data?.data || m;
-      thinkingLevelSupported = modelSupportsThinkingLevel(selectedModel);
-      if (data?.data?.thinkingLevel) currentThinkingLevel = data.data.thinkingLevel;
-      updateThinkingBtn();
-      updateModelLabel();
-      if (m.contextWindow) {
-        contextWindowSize = m.contextWindow;
-        updateTokenUsage();
-        }
-      });
-      itemsContainer.appendChild(el);
+    const filtered = availableModels.filter((model) => {
+      const shortName = String(model.id || '').replace(/-\d{8}$/, '');
+      const providerStr = model.provider || '';
+      return !query || shortName.toLowerCase().includes(query) || providerStr.toLowerCase().includes(query);
     });
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'model-dropdown-item empty';
+      empty.textContent = '没有匹配的模型';
+      itemsContainer.appendChild(empty);
+      activeIndex = -1;
+      return;
+    }
+
+    filtered.forEach((model) => {
+      const shortName = String(model.id || '').replace(/-\d{8}$/, '');
+      const providerStr = model.provider || '';
+
+      const option = document.createElement('div');
+      option.className = `model-dropdown-item${model.id === currentModelId ? ' active' : ''}`;
+      option.setAttribute('role', 'option');
+      option.title = [model.id, providerStr].filter(Boolean).join(' · ');
+
+      const main = document.createElement('span');
+      main.className = 'model-dropdown-item-main';
+      const name = document.createElement('span');
+      name.className = 'model-dropdown-item-name';
+      name.textContent = shortName;
+      main.appendChild(name);
+      if (providerStr) {
+        const provider = document.createElement('span');
+        provider.className = 'model-dropdown-item-provider';
+        provider.textContent = providerStr;
+        main.appendChild(provider);
+      }
+
+      const context = document.createElement('span');
+      context.className = 'model-dropdown-item-ctx';
+      const contextWindow = model.contextWindow || model.context_window;
+      context.textContent = contextWindow ? `${Math.round(contextWindow / 1000)}k` : '';
+      option.append(main, context);
+      option.addEventListener('mouseenter', () => setActiveIndex(optionElements().indexOf(option), false));
+      option.addEventListener('click', () => selectModel(model));
+      itemsContainer.appendChild(option);
+    });
+
+    const selectedIndex = filtered.findIndex(model => model.id === currentModelId);
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0, false);
   }
 
   renderItems('');
 
   search.addEventListener('input', () => renderItems(search.value));
-  search.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeModelDropdown(); e.stopPropagation(); }
-    if (e.key === 'Enter') {
-      const first = itemsContainer.querySelector('.model-dropdown-item');
-      if (first) first.click();
+  search.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeModelDropdown();
+      modelDropdownBtn.focus();
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex(activeIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex(activeIndex <= 0 ? optionElements().length - 1 : activeIndex - 1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      optionElements()[activeIndex]?.click();
     }
   });
 
   modelDropdownMenu.classList.remove('hidden');
   modelDropdown.classList.add('open');
-  requestAnimationFrame(() => search.focus());
+  requestAnimationFrame(() => {
+    positionModelDropdown();
+    search.focus();
+  });
 }
 
 function closeModelDropdown() {
   modelDropdownMenu.classList.add('hidden');
   modelDropdown.classList.remove('open');
+  modelDropdownBtn.setAttribute('aria-expanded', 'false');
 }
 
 modelDropdownBtn.addEventListener('click', toggleModelDropdown);
+window.addEventListener('resize', positionModelDropdown);
 
 // Close dropdown on outside click
 document.addEventListener('click', (e) => {
@@ -1209,7 +1469,7 @@ document.addEventListener('click', (e) => {
 // Thinking level button — cycles through levels
 thinkingBtn.addEventListener('click', async () => {
   if (!thinkingLevelSupported) return;
-  const data = await rpcCommand({ type: 'cycle_thinking_level' }, 'Cycling thinking...');
+  const data = await rpcCommand({ type: 'cycle_thinking_level' }, '正在切换思考级别…');
   applyThinkingLevelResponse(data);
 });
 
@@ -1218,6 +1478,29 @@ thinkingBtn.addEventListener('click', async () => {
 // ═══════════════════════════════════════
 
 document.addEventListener('keydown', (e) => {
+  const primaryModifier = e.metaKey || e.ctrlKey;
+  if (primaryModifier && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (commandPalette.classList.contains('hidden')) openCommandPalette();
+    else closeCommandPalette();
+    return;
+  }
+  if (primaryModifier && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    newSession().catch(error => showToast({ title: '新建会话失败', message: String(error), type: 'error' }));
+    return;
+  }
+  if (primaryModifier && e.key.toLowerCase() === 'b') {
+    e.preventDefault();
+    toggleSidebar();
+    return;
+  }
+  if (primaryModifier && e.shiftKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    toggleFileSidebar();
+    return;
+  }
+
   // Escape — Abort streaming, or close sidebar on mobile
   if (e.key === 'Escape') {
     // Close palettes/panels first
@@ -1233,12 +1516,21 @@ document.addEventListener('keydown', (e) => {
       closeModelDropdown();
       return;
     }
+    if (activeView !== 'chat') {
+      if (isDesktop && !desktopHasActivePiSession) showLauncher();
+      else setActiveView('chat');
+      return;
+    }
+    if (!fileSidebar.classList.contains('collapsed') && window.innerWidth <= 960) {
+      setFileSidebarOpen(false);
+      return;
+    }
 
     if (state.isStreaming) {
       wsClient.send({ type: 'abort' });
-      messageRenderer.renderError('Aborted by user');
+      messageRenderer.renderError('已停止生成');
       showTypingIndicator(false);
-    } else if (!sidebarEl.classList.contains('collapsed') && window.innerWidth <= 768) {
+    } else if (!sidebarEl.classList.contains('collapsed') && window.innerWidth <= 720) {
       toggleSidebar();
     }
   }
@@ -1260,25 +1552,53 @@ function isInInput() {
 // ═══════════════════════════════════════
 
 function isMobile() {
-  return window.innerWidth <= 768;
+  return window.innerWidth <= 720;
 }
 
 function updateSidebarToggleIcon() {
-  sidebarToggle.textContent = '☰';
+  const collapsed = sidebarEl.classList.contains('collapsed');
+  sidebarToggle.title = collapsed ? '展开会话栏' : '折叠会话栏';
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  if (mobileSidebarToggle) {
+    mobileSidebarToggle.title = collapsed ? '打开会话栏' : '关闭会话栏';
+    mobileSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  }
 }
 
-function toggleSidebar() {
-  sidebarEl.classList.toggle('collapsed');
+function toggleSidebar(forceOpen = null) {
+  const shouldOpen = forceOpen == null ? sidebarEl.classList.contains('collapsed') : Boolean(forceOpen);
+  sidebarEl.classList.toggle('collapsed', !shouldOpen);
   sidebarOverlay.classList.toggle('visible', !sidebarEl.classList.contains('collapsed') && isMobile());
+  if (!isMobile()) localStorage.setItem('pi-studio-sidebar-collapsed', shouldOpen ? 'false' : 'true');
   updateSidebarToggleIcon();
 }
 
-sidebarToggle.addEventListener('click', toggleSidebar);
+sidebarToggle.addEventListener('click', () => toggleSidebar());
+mobileSidebarToggle?.addEventListener('click', () => toggleSidebar(true));
 
 sidebarOverlay.addEventListener('click', () => {
   sidebarEl.classList.add('collapsed');
   sidebarOverlay.classList.remove('visible');
   updateSidebarToggleIcon();
+});
+
+if (!isMobile() && localStorage.getItem('pi-studio-sidebar-collapsed') === 'true') {
+  sidebarEl.classList.add('collapsed');
+}
+updateSidebarToggleIcon();
+
+let wasMobileLayout = isMobile();
+window.addEventListener('resize', () => {
+  const mobileLayout = isMobile();
+  if (mobileLayout && !wasMobileLayout) {
+    sidebarEl.classList.add('collapsed');
+  } else if (!mobileLayout && wasMobileLayout) {
+    sidebarEl.classList.toggle('collapsed', localStorage.getItem('pi-studio-sidebar-collapsed') === 'true');
+  }
+  sidebarOverlay.classList.toggle('visible', mobileLayout && !sidebarEl.classList.contains('collapsed'));
+  fileSidebarOverlay?.classList.toggle('visible', window.innerWidth <= 960 && !fileSidebar.classList.contains('collapsed'));
+  updateSidebarToggleIcon();
+  wasMobileLayout = mobileLayout;
 });
 
 
@@ -1287,7 +1607,7 @@ const newSessionBtn = document.getElementById('new-session-btn');
 newSessionBtn.addEventListener('click', () => {
   newSession().catch((error) => {
     console.error('[App] Failed to create new session:', error);
-    messageRenderer.renderError(`Failed to create session: ${error.message || error}`);
+    showToast({ title: '新建会话失败', message: error.message || String(error), type: 'error' });
   });
 });
 
@@ -1413,7 +1733,7 @@ async function handleSessionSelect(session, project) {
     await ensureWorkspaceForSelectedSession(session, project);
   } catch (error) {
     console.error('[App] Failed to switch project for session:', error);
-    messageRenderer.renderError(`Failed to switch project: ${error.message || error}`);
+    messageRenderer.renderError(`切换项目失败：${error.message || error}`);
     return;
   }
 
@@ -1433,7 +1753,7 @@ async function switchSession(sessionFile, session = null, project = null) {
     currentStreamingElement = null;
     currentStreamingThinking = '';
     currentStreamingText = '';
-    
+
     state.reset();
     messageRenderer.clear();
     toolCardRenderer.clear();
@@ -1531,12 +1851,12 @@ async function switchSession(sessionFile, session = null, project = null) {
 
       if (!res.ok) {
         const err = await res.json();
-        messageRenderer.renderError(`Failed to switch session: ${err.error}`);
+        messageRenderer.renderError(`切换会话失败：${err.error}`);
       }
     }
   } catch (error) {
     console.error('[App] Failed to switch session:', error);
-    messageRenderer.renderError(`Failed to switch session: ${error.message || error}`);
+    messageRenderer.renderError(`切换会话失败：${error.message || error}`);
   }
 }
 
@@ -1680,7 +2000,7 @@ pollInstances();
 function updateMirrorInputState() {
   const inputArea = document.querySelector('.input-area');
   messageInput.disabled = false;
-  messageInput.placeholder = selectedSessionFile ? '在当前会话中输入消息...' : '输入消息...';
+  messageInput.placeholder = selectedSessionFile ? '在当前会话中向 Pi 发送消息…' : '向 Pi 发送消息…';
   inputArea?.classList.remove('mirror-readonly');
 }
 
@@ -1731,7 +2051,10 @@ function renderSessionHistory(entries) {
 
       const text = textBlocks.map((b) => b.text).join('\n');
 
-      if (text || thinkingBlocks.length > 0) {
+      if (messageRenderer.hasAssistantError(msg)) {
+        assistantCount++;
+        messageRenderer.renderAssistantError(msg, true);
+      } else if (text || thinkingBlocks.length > 0) {
         assistantCount++;
         messageRenderer.renderAssistantMessage(
           {
@@ -1802,7 +2125,7 @@ function showTypingIndicator(show) {
 
 function updateCostDisplay() {
   if (sessionTotalCost > 0) {
-    sessionCostEl.textContent = `$${sessionTotalCost.toFixed(4)} (sub)`;
+    sessionCostEl.textContent = `$${sessionTotalCost.toFixed(4)}`;
     sessionCostEl.classList.add('visible');
   } else {
     sessionCostEl.classList.remove('visible');
@@ -1820,7 +2143,7 @@ function updateTokenUsage() {
     } else if (pct >= 60) {
       tokenUsageEl.classList.add('warning');
     }
-    tokenUsageEl.title = `Context: ${(lastInputTokens / 1000).toFixed(1)}k / ${(contextWindowSize / 1000).toFixed(0)}k tokens`;
+    tokenUsageEl.title = `上下文：${(lastInputTokens / 1000).toFixed(1)}k / ${(contextWindowSize / 1000).toFixed(0)}k Token`;
     if (pct >= 80) {
       showCompactButton();
     } else {
@@ -1839,14 +2162,13 @@ function showCompactButton() {
   const btn = document.createElement('button');
   btn.id = 'compact-btn';
   btn.className = 'compact-btn';
-  btn.textContent = 'Compact';
-  btn.title = 'Context is over 80% — compact to save tokens';
+  btn.textContent = '压缩上下文';
+  btn.title = '上下文已超过 80%，压缩后可释放空间';
   btn.addEventListener('click', () => {
-    rpcCommand({ type: 'compact' }, 'Compacting...');
+    rpcCommand({ type: 'compact' }, '正在压缩上下文…');
     hideCompactButton();
   });
-  // Insert next to token usage in header
-  tokenUsageEl.parentElement.insertBefore(btn, tokenUsageEl.nextSibling);
+  contextViz?.appendChild(btn);
 }
 
 function hideCompactButton() {
@@ -1865,31 +2187,32 @@ function updateConnectionStatus(status) {
   statusIndicator.className = `status-indicator ${status}`;
 
   if (status === 'connected') {
-    statusText.textContent = tailscaleUrl ? 'Connected • TS' : 'Connected';
+    statusText.textContent = tailscaleUrl ? '已连接 · TS' : '已连接';
     statusText.title = tailscaleUrl || '';
     // Fetch tailscale info on first connect
     if (!tailscaleUrl) {
       fetch('/api/health').then(r => r.json()).then(data => {
         if (data.tailscaleUrl) {
           tailscaleUrl = data.tailscaleUrl;
-          statusText.textContent = 'Connected • TS';
+          statusText.textContent = '已连接 · TS';
           statusText.title = tailscaleUrl;
         }
       }).catch(() => {});
     }
   } else if (status === 'disconnected') {
-    statusText.textContent = 'Disconnected';
+    statusText.textContent = '连接已断开';
   } else if (status === 'idle') {
-    statusText.textContent = 'No project';
-    statusText.title = 'Open a project to start bundled Pi';
+    statusText.textContent = '未打开项目';
+    statusText.title = '打开一个项目以启动 Pi';
   } else if (status === 'connecting') {
-    statusText.textContent = 'Starting Pi...';
+    statusText.textContent = '正在启动 Pi…';
     statusText.title = '';
   }
 }
 
 function setWorkspaceState({ path = '', noFolder = false } = {}) {
   currentWorkspace = { path, noFolder };
+  fileBrowser.setRoot(path || '');
   renderSelectedSessionStrip();
 }
 
@@ -1904,6 +2227,22 @@ function setSelectedSessionState(session, project) {
 
 function renderSelectedSessionStrip(project = null) {
   if (!workspaceChip || !workspaceName || !workspacePath) return;
+
+  const workspaceLabel = currentWorkspace.noFolder
+    ? '无文件夹模式'
+    : (basename(currentWorkspace.path) || '准备工作区');
+  const workspacePathLabel = currentWorkspace.noFolder
+    ? 'pi-studio 专属目录'
+    : (currentWorkspace.path || '点击选择项目');
+
+  if (projectSwitcherName) projectSwitcherName.textContent = workspaceLabel;
+  if (projectSwitcherPath) projectSwitcherPath.textContent = workspacePathLabel;
+  if (projectSwitcher) projectSwitcher.title = currentWorkspace.path || workspaceLabel;
+  if (headerWorkspaceName) {
+    headerWorkspaceName.textContent = workspacePathLabel;
+    headerWorkspaceName.title = workspacePathLabel;
+  }
+  if (headerSessionTitle) headerSessionTitle.textContent = selectedSessionTitle || '新会话';
 
   workspaceChip.classList.toggle('no-folder', false);
   workspaceName.textContent = selectedSessionTitle || '新会话';
@@ -1936,7 +2275,7 @@ function resetSelectionToInstance(instance) {
   selectedSessionFile = sessionFile;
   selectedSessionLiveOnly = false;
   mirrorActiveSessionFile = sessionFile;
-  selectedSessionTitle = instance.noFolder || instance.no_folder ? 'No folder' : '当前会话';
+  selectedSessionTitle = instance.noFolder || instance.no_folder ? '无文件夹会话' : '当前会话';
   viewingActiveSession = true;
   sidebar.clearActive();
   updateMirrorInputState();
@@ -1992,11 +2331,11 @@ function updateUI() {
   if (isStreaming) {
     statusIndicator.classList.add('streaming');
     statusIndicator.classList.remove('connected');
-    statusText.textContent = 'Working...';
+    statusText.textContent = 'Pi 正在处理…';
   } else {
     statusIndicator.classList.remove('streaming');
     statusIndicator.classList.add('connected');
-    statusText.textContent = 'Connected';
+    statusText.textContent = '已连接';
   }
 
   messageInput.disabled = false;
@@ -2037,6 +2376,34 @@ const extensionsSearch = document.getElementById('extensions-search');
 const extensionsCategories = document.getElementById('extensions-categories');
 const extensionsStatus = document.getElementById('extensions-status');
 const extensionsList = document.getElementById('extensions-list');
+const navProjects = document.getElementById('nav-projects');
+const navExtensions = document.getElementById('nav-extensions');
+
+let activeView = 'chat';
+
+function setActiveView(view) {
+  const nextView = ['chat', 'projects', 'extensions', 'settings'].includes(view) ? view : 'chat';
+  activeView = nextView;
+  appLayout.dataset.view = nextView;
+
+  launcherEl.classList.toggle('hidden', nextView !== 'projects');
+  settingsPanel.classList.toggle('hidden', nextView !== 'settings');
+  extensionsPanel.classList.toggle('hidden', nextView !== 'extensions');
+  messagesContainer.classList.toggle('hidden', nextView !== 'chat');
+  inputArea.classList.toggle('hidden', nextView !== 'chat');
+  messagesContainer.style.display = '';
+  inputArea.style.display = '';
+
+  navProjects?.classList.toggle('active', nextView === 'projects');
+  navExtensions?.classList.toggle('active', nextView === 'extensions');
+  settingsBtn?.classList.toggle('active', nextView === 'settings');
+  document.querySelector('.mode-link:first-child')?.classList.toggle('active', nextView === 'chat');
+
+  if (isMobile()) {
+    sidebarEl.classList.add('collapsed');
+    sidebarOverlay.classList.remove('visible');
+  }
+}
 
 
 const toggleAutoCompact = document.getElementById('toggle-auto-compact');
@@ -2063,7 +2430,9 @@ function buildThemeGrid() {
   for (const [id, theme] of Object.entries(themes)) {
     const btn = document.createElement('button');
     btn.className = `theme-swatch${current === id ? ' active' : ''}`;
-    const dots = (theme.colors || []).map(c => 
+    btn.dataset.label = theme.name;
+    btn.setAttribute('aria-label', `切换为${theme.name}主题`);
+    const dots = (theme.colors || []).map(c =>
       `<span class="swatch-dot" style="background:${c}"></span>`
     ).join('');
     btn.innerHTML = `<span class="swatch-colors">${dots}</span>`;
@@ -2078,14 +2447,7 @@ function buildThemeGrid() {
 
 async function openSettings() {
   buildThemeGrid();
-  hideLauncher();
-  hideExtensions(false);
-  messagesContainer.style.display = 'none';
-  document.querySelector('.input-area').style.display = 'none';
-  document.querySelector('.welcome')?.remove();
-  settingsPanel.classList.remove('hidden');
-
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
+  setActiveView('settings');
 
   if (isDesktop) {
     try {
@@ -2097,7 +2459,7 @@ async function openSettings() {
       toggleAutostart.className = `settings-toggle${autostartEnabled ? ' on' : ''}`;
       btnTauPort.textContent = window.tauDesktop?.transport === 'mirror'
         ? String(settings.tauPort || 3001)
-        : 'Native RPC';
+        : '原生 RPC';
       renderPiRuntimeInfo(piInfo);
     } catch (e) {
       console.warn('[Desktop] Failed to read desktop settings:', e);
@@ -2106,8 +2468,8 @@ async function openSettings() {
   } else {
     renderPiRuntimeInfo({
       source: 'web',
-      piVersion: 'Not available',
-      nodeVersion: 'Not available',
+      piVersion: '不可用',
+      nodeVersion: '不可用',
       platform: navigator.platform || 'browser',
       command: '',
     });
@@ -2128,8 +2490,6 @@ async function openSettings() {
       thinkingLevelSupported = modelSupportsThinkingLevel(modelFromStateOrList(s.model));
       currentThinkingLevel = s.thinkingLevel || 'off';
       updateThinkingBtn();
-      // Session name
-      inputSessionName.value = s.sessionName || '';
     }
   } catch (e) {
     // Silent
@@ -2150,16 +2510,11 @@ async function openSettings() {
 }
 
 function closeSettings() {
-  settingsPanel.classList.add('hidden');
   if (isDesktop && !desktopHasActivePiSession) {
     showLauncher();
     return;
   }
-  messagesContainer.style.display = '';
-  document.querySelector('.input-area').style.display = '';
-
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-  document.querySelector('.mode-link:first-child')?.classList.add('active');
+  setActiveView('chat');
 }
 
 settingsBtn.addEventListener('click', openSettings);
@@ -2168,11 +2523,12 @@ settingsClose.addEventListener('click', closeSettings);
 function renderPiRuntimeInfo(info = {}) {
   const source = info.source || (info.bundled ? 'bundled' : 'unknown');
   const sourceOk = info.bundled || source === 'system' || source === 'override';
-  piRuntimeSource.textContent = info.bundled ? 'Bundled' : labelCase(source);
+  const sourceLabels = { bundled: '应用内置', system: '系统安装', override: '自定义路径', web: 'Web 模式', unknown: '未知' };
+  piRuntimeSource.textContent = sourceLabels[info.bundled ? 'bundled' : source] || labelCase(source);
   piRuntimeSource.className = `settings-value ${sourceOk ? 'ok' : 'warn'}`;
-  piRuntimeVersion.textContent = info.piVersion || 'Unavailable';
-  piNodeVersion.textContent = info.nodeVersion || 'Unavailable';
-  piRuntimePlatform.textContent = info.platform || 'Unknown';
+  piRuntimeVersion.textContent = info.piVersion || '不可用';
+  piNodeVersion.textContent = info.nodeVersion || '不可用';
+  piRuntimePlatform.textContent = info.platform || '未知';
   piRuntimeCommand.textContent = info.command || '';
   piRuntimeCommand.title = info.command || '';
 
@@ -2192,51 +2548,28 @@ function labelCase(value) {
 }
 
 async function openExtensions() {
-  hideLauncher();
-  settingsPanel.classList.add('hidden');
-  messagesContainer.style.display = 'none';
-  document.querySelector('.input-area').style.display = 'none';
-  document.querySelector('.welcome')?.remove();
-  extensionsPanel.classList.remove('hidden');
-
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-  document.querySelector('.mode-link-extensions')?.classList.add('active');
-
+  setActiveView('extensions');
   await loadPiExtensions();
 }
 
 function closeExtensions() {
-  hideExtensions(false);
   if (isDesktop && !desktopHasActivePiSession) {
     showLauncher();
     return;
   }
-
-  messagesContainer.style.display = '';
-  document.querySelector('.input-area').style.display = '';
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-  document.querySelector('.mode-link:first-child')?.classList.add('active');
+  setActiveView('chat');
 }
 
 function hideExtensions(restoreChat = true) {
   extensionsPanel.classList.add('hidden');
-  if (
-    restoreChat &&
-    settingsPanel.classList.contains('hidden') &&
-    launcherEl?.classList.contains('hidden')
-  ) {
-    messagesContainer.style.display = '';
-    document.querySelector('.input-area').style.display = '';
-    document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-    document.querySelector('.mode-link:first-child')?.classList.add('active');
-  }
+  if (restoreChat && activeView === 'extensions') setActiveView('chat');
 }
 
 async function loadPiExtensions(force = false) {
   if (!isDesktop) {
     extensionsCatalog = { installDir: '', catalogRoots: [], extensions: [] };
     renderExtensions();
-    extensionsStatus.textContent = 'Extensions are available in the desktop app.';
+    extensionsStatus.textContent = '扩展仅在桌面应用中可用。';
     return;
   }
 
@@ -2246,7 +2579,7 @@ async function loadPiExtensions(force = false) {
   }
 
   extensionsStatus.className = 'extensions-status';
-  extensionsStatus.textContent = 'Loading extensions...';
+  extensionsStatus.textContent = '正在加载扩展…';
   extensionsList.innerHTML = '';
 
   try {
@@ -2256,7 +2589,7 @@ async function loadPiExtensions(force = false) {
   } catch (error) {
     extensionsCatalog = { installDir: '', catalogRoots: [], extensions: [] };
     extensionsStatus.className = 'extensions-status error';
-    extensionsStatus.textContent = `Failed to load extensions: ${error}`;
+    extensionsStatus.textContent = `扩展加载失败：${error}`;
     extensionsList.innerHTML = '';
     renderExtensionCategories();
   }
@@ -2277,7 +2610,7 @@ function renderExtensionCategories() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `extensions-category${extensionCategory === category ? ' active' : ''}`;
-    btn.textContent = category;
+    btn.textContent = ({ All: '全部', Installed: '已安装' })[category] || category;
     btn.addEventListener('click', () => {
       extensionCategory = category;
       renderExtensionCategories();
@@ -2304,18 +2637,18 @@ function renderExtensions() {
   if (extensions.length === 0) {
     extensionsStatus.className = 'extensions-status error';
     extensionsStatus.textContent = rootCount === 0
-      ? 'No Pi extension catalog was found. Re-run the Pi vendor script or install Pi locally.'
-      : 'No installable extensions were found in the Pi catalog.';
+      ? '未找到 Pi 扩展目录，请重新运行 vendor 脚本或在本机安装 Pi。'
+      : 'Pi 扩展目录中没有可安装的扩展。';
   } else {
     extensionsStatus.className = 'extensions-status';
-    extensionsStatus.textContent = `${filtered.length} of ${extensions.length} extensions · installs to ${extensionsCatalog.installDir}`;
+    extensionsStatus.textContent = `显示 ${filtered.length} / ${extensions.length} 个扩展 · 安装目录：${extensionsCatalog.installDir}`;
   }
 
   extensionsList.innerHTML = '';
   if (filtered.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'extensions-empty';
-    empty.textContent = 'No extensions match the current filter.';
+    empty.textContent = '没有符合当前筛选条件的扩展。';
     extensionsList.appendChild(empty);
     return;
   }
@@ -2340,17 +2673,17 @@ function renderExtensionRow(item) {
   name.textContent = item.name;
   title.appendChild(name);
 
-  if (item.installed) title.appendChild(extensionTag('Installed', 'ok'));
-  if (item.requiresDependencies) title.appendChild(extensionTag('npm deps'));
+  if (item.installed) title.appendChild(extensionTag('已安装', 'ok'));
+  if (item.requiresDependencies) title.appendChild(extensionTag('需要 npm 依赖'));
 
   const desc = document.createElement('div');
   desc.className = 'extension-description';
-  desc.textContent = item.description || 'Pi extension';
+  desc.textContent = item.description || 'Pi 扩展';
 
   const meta = document.createElement('div');
   meta.className = 'extension-meta';
   meta.appendChild(extensionMeta(item.category));
-  meta.appendChild(extensionMeta(item.kind === 'directory' ? 'folder' : 'file'));
+  meta.appendChild(extensionMeta(item.kind === 'directory' ? '文件夹' : '文件'));
   meta.appendChild(extensionMeta(item.source));
   if (item.installedPath) meta.appendChild(extensionMeta(shortenPath(item.installedPath)));
 
@@ -2362,12 +2695,12 @@ function renderExtensionRow(item) {
   action.type = 'button';
   action.className = 'extension-install';
   action.disabled = item.installed || extensionInstallingId === item.id;
-  action.title = item.installed ? 'Installed' : 'Install extension';
+  action.title = item.installed ? '已安装' : '安装扩展';
   action.innerHTML = item.installed
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>Installed</span>'
+    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>已安装</span>'
     : extensionInstallingId === item.id
-      ? '<span>Installing...</span>'
-      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>Install</span>';
+      ? '<span>正在安装…</span>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>安装</span>';
   action.addEventListener('click', () => installPiExtension(item.id));
 
   row.appendChild(main);
@@ -2409,12 +2742,14 @@ async function installPiExtension(id) {
     if (index >= 0) {
       extensionsCatalog.extensions[index] = result.extension;
     }
-    const dependency = result.dependencyStatus ? ` Dependencies: ${result.dependencyStatus}.` : '';
+    const dependency = result.dependencyStatus ? ` 依赖状态：${result.dependencyStatus}。` : '';
     statusClass = 'extensions-status ok';
-    statusText = `${result.warning || 'Extension installed.'}${dependency}`;
+    statusText = `${result.warning || '扩展安装完成。'}${dependency}`;
+    showToast({ title: '扩展安装完成', message: result.extension?.name || id, type: 'success' });
   } catch (error) {
     statusClass = 'extensions-status error';
-    statusText = `Install failed: ${error}`;
+    statusText = `安装失败：${error}`;
+    showToast({ title: '扩展安装失败', message: String(error), type: 'error' });
   } finally {
     extensionInstallingId = null;
     renderExtensionCategories();
@@ -2468,7 +2803,7 @@ toggleAutostart?.addEventListener('click', async () => {
     toggleAutostart.className = `settings-toggle${enabled ? ' on' : ''}`;
   } catch (e) {
     toggleAutostart.className = `settings-toggle${isOn ? ' on' : ''}`;
-    messageRenderer.renderError(`Autostart failed: ${e}`);
+    showToast({ title: '开机启动设置失败', message: String(e), type: 'error' });
   }
 });
 
@@ -2489,8 +2824,9 @@ toggleAuth.addEventListener('click', async () => {
 
 
 // Restore saved theme
+const hasSavedTheme = Boolean(localStorage.getItem('tau-theme'));
 const savedTheme = getCurrentTheme();
-applyTheme(savedTheme);
+applyTheme(savedTheme, { persist: hasSavedTheme });
 
 // ═══════════════════════════════════════
 // Context Window Visualiser
@@ -2501,6 +2837,7 @@ const contextBar = document.getElementById('context-bar');
 const contextLegend = document.getElementById('context-legend');
 const contextVizUsed = document.getElementById('context-viz-used');
 const contextVizTotal = document.getElementById('context-viz-total');
+const sessionMetricsTrigger = document.getElementById('session-metrics-trigger');
 
 
 function formatTokens(n) {
@@ -2526,9 +2863,9 @@ function updateContextViz() {
   const free = Math.max(0, total - totalUsed);
 
   const segments = [
-    { key: 'cache', label: 'Cached', tokens: cacheRead, color: 'cache' },
-    { key: 'messages', label: 'Input', tokens: freshInput, color: 'messages' },
-    { key: 'free', label: 'Available', tokens: free, color: 'free' },
+    { key: 'cache', label: '缓存', tokens: cacheRead, color: 'cache' },
+    { key: 'messages', label: '输入', tokens: freshInput, color: 'messages' },
+    { key: 'free', label: '可用', tokens: free, color: 'free' },
   ];
 
   // Build bar
@@ -2560,12 +2897,12 @@ function updateContextViz() {
 
   // Footer
   const pct = Math.round((totalUsed / total) * 100);
-  contextVizUsed.textContent = `${pct}% used`;
+  contextVizUsed.textContent = `已使用 ${pct}%`;
   contextVizTotal.textContent = `${formatTokens(totalUsed)} / ${formatTokens(total)}`;
 }
 
 // Toggle on click
-tokenUsageEl.addEventListener('click', (e) => {
+sessionMetricsTrigger.addEventListener('click', (e) => {
   e.stopPropagation();
   const isHidden = contextViz.classList.contains('hidden');
   if (isHidden) {
@@ -2578,7 +2915,7 @@ tokenUsageEl.addEventListener('click', (e) => {
 
 // Close on click outside
 document.addEventListener('click', (e) => {
-  if (!contextViz.contains(e.target) && e.target !== tokenUsageEl) {
+  if (!contextViz.contains(e.target) && !sessionMetricsTrigger.contains(e.target)) {
     contextViz.classList.add('hidden');
   }
 });
@@ -2596,7 +2933,7 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
-  recognition.lang = 'en-AU';
+  recognition.lang = 'zh-CN';
 
   let finalTranscript = '';
   let interimTranscript = '';
@@ -2640,7 +2977,7 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
     interimTranscript = '';
     isRecording = true;
     micBtn.classList.add('recording');
-    micBtn.title = 'Stop recording';
+    micBtn.title = '停止录音';
     recognition.start();
     messageInput.focus();
   }
@@ -2648,7 +2985,7 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   function stopRecording() {
     isRecording = false;
     micBtn.classList.remove('recording');
-    micBtn.title = 'Voice input';
+    micBtn.title = '语音输入';
     try { recognition.stop(); } catch {}
     // Commit final transcript
     messageInput.value = finalTranscript;
@@ -2666,31 +3003,12 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
 // Initialize
 // ═══════════════════════════════════════
 
-// On mobile, move cost + token usage above input
+// Mobile starts with the session drawer closed.
 if (isMobile()) {
   sidebarEl.classList.add('collapsed');
-
-  const mobileBar = document.getElementById('mobile-model-bar');
-  const sessionCost = document.getElementById('session-cost');
-  const tokenUsage = document.getElementById('token-usage');
-  if (mobileBar && sessionCost && tokenUsage) {
-    mobileBar.appendChild(sessionCost);
-    mobileBar.appendChild(tokenUsage);
-  }
-
-  // Start collapsed
-  mobileBar.classList.add('collapsed');
-
-  // Toggle via chevron
-  const contextToggle = document.getElementById('mobile-context-toggle');
-  contextToggle.addEventListener('click', () => {
-    mobileBar.classList.toggle('collapsed');
-    contextToggle.classList.toggle('flipped', !mobileBar.classList.contains('collapsed'));
-  });
 }
 
 // Launcher
-const launcherEl = document.getElementById('launcher');
 const launcher = new Launcher(launcherEl, async (projectPath) => {
   launcher.setBusy(projectPath);
   try {
@@ -2709,18 +3027,21 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
       setTimeout(() => sidebar.loadSessions().then(updateMirrorLiveIndicator), 1000);
       if (isDesktop) {
         invoke('notify_desktop', {
-          request: { title: 'pi-studio', body: 'Pi is running and pi-studio is connected.' },
+          request: { title: 'pi-studio', body: 'Pi 已启动，工作台连接成功。' },
         }).catch(() => {});
       }
     } else {
-      launcher.setError(data.error || 'Failed to launch Pi');
+      launcher.setError(data.error || 'Pi 启动失败');
     }
   } catch (e) {
     console.error('[Launcher] Failed to launch:', e);
     launcher.setError(String(e));
   }
 }, async () => {
-  if (!isDesktop) return;
+  if (!isDesktop) {
+    showToast({ title: '桌面端功能', message: '添加本地项目仅在 pi-studio 桌面应用中可用。', type: 'info' });
+    return;
+  }
   try {
     const folder = await invoke('pick_project_folder');
     if (folder) {
@@ -2730,7 +3051,10 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
     launcher.setError(String(e));
   }
 }, async (projectPath) => {
-  if (!isDesktop) return;
+  if (!isDesktop) {
+    showToast({ title: '桌面端功能', message: '新窗口打开仅在桌面应用中可用。', type: 'info' });
+    return;
+  }
   launcher.setBusy(projectPath);
   try {
     await invoke('open_project_window', { request: { path: projectPath } });
@@ -2739,7 +3063,10 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
     launcher.setError(String(e));
   }
 }, async () => {
-  if (!isDesktop) return;
+  if (!isDesktop) {
+    showToast({ title: '桌面端功能', message: '无文件夹模式仅在桌面应用中可用。', type: 'info' });
+    return;
+  }
   launcher.setBusy('__no_folder__');
   try {
     const res = await fetch('/api/projects/launch', {
@@ -2756,7 +3083,7 @@ const launcher = new Launcher(launcherEl, async (projectPath) => {
       wsClient.forceReconnect();
       setTimeout(() => sidebar.loadSessions().then(updateMirrorLiveIndicator), 1000);
     } else {
-      launcher.setError(data.error || 'Failed to launch Pi');
+      launcher.setError(data.error || 'Pi 启动失败');
     }
   } catch (e) {
     console.error('[Launcher] Failed to launch no-folder mode:', e);
@@ -2774,7 +3101,7 @@ workspaceNoFolderBtn?.addEventListener('click', () => {
 
 // Check if launcher should show (projects configured)
 async function initLauncher() {
-  if (isDesktop) addLauncherNav();
+  addLauncherNav();
   try {
     const res = await fetch('/api/projects');
     const data = await res.json();
@@ -2884,78 +3211,31 @@ async function ensureDefaultPiSession() {
 }
 
 function addLauncherNav() {
-  const modeToggle = document.getElementById('mode-toggle');
-  if (!modeToggle) return;
-
-  if (!modeToggle.querySelector('.mode-link-launcher')) {
-    const launcherLink = document.createElement('span');
-    launcherLink.className = 'mode-link mode-link-launcher';
-    launcherLink.title = 'Projects';
-    launcherLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
-    launcherLink.addEventListener('click', () => {
-      if (!launcherEl.classList.contains('hidden')) {
-        hideLauncher();
-        return;
-      }
-      showLauncher();
-    });
-    modeToggle.appendChild(launcherLink);
-  }
-
-  if (!modeToggle.querySelector('.mode-link-extensions')) {
-    const extensionsLink = document.createElement('span');
-    extensionsLink.className = 'mode-link mode-link-extensions';
-    extensionsLink.title = 'Extensions';
-    extensionsLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v4h4v6h-4v8H9v-8H5V7h4V3Z"/><path d="M9 13h6"/></svg>';
-    extensionsLink.addEventListener('click', () => {
-      openExtensions();
-    });
-    modeToggle.appendChild(extensionsLink);
-  }
+  navProjects?.addEventListener('click', showLauncher);
+  navExtensions?.addEventListener('click', openExtensions);
+  projectSwitcher?.addEventListener('click', showLauncher);
 }
 
 function showLauncher() {
-  settingsPanel.classList.add('hidden');
-  hideExtensions(false);
-  launcherEl.classList.remove('hidden');
-  messagesContainer.style.display = 'none';
-  document.querySelector('.input-area').style.display = 'none';
-  document.querySelector('.welcome')?.remove();
-
-  // Update nav state
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-  document.querySelector('.mode-link-launcher')?.classList.add('active');
-
+  setActiveView('projects');
   launcher.load();
 }
 
 function hideLauncher() {
-  launcherEl.classList.add('hidden');
-  if (settingsPanel.classList.contains('hidden') && extensionsPanel.classList.contains('hidden')) {
-    messagesContainer.style.display = '';
-    document.querySelector('.input-area').style.display = '';
-  }
-
-  // Update nav state
-  document.querySelectorAll('.mode-link').forEach(l => l.classList.remove('active'));
-  document.querySelector('.mode-link:first-child')?.classList.add('active');
+  setActiveView('chat');
 }
 
 function returnToChatSurface() {
-  settingsPanel.classList.add('hidden');
-  hideExtensions(false);
-  hideLauncher();
+  setActiveView('chat');
 }
 
 // Make the tau icon in sidebar switch back to chat
 document.querySelector('.mode-link:first-child')?.addEventListener('click', () => {
-  settingsPanel.classList.add('hidden');
-  hideExtensions(false);
   if (isDesktop && !desktopHasActivePiSession) {
     showLauncher();
     return;
   }
-  hideLauncher();
+  returnToChatSurface();
 });
 
 if (isDesktop) {
@@ -2984,11 +3264,11 @@ if (isDesktop) {
       desktopHasActivePiSession = false;
       updateConnectionStatus('idle');
       showLauncher();
-      launcher.setError(event.payload.error || 'Failed to auto-start Pi');
+      launcher.setError(event.payload.error || 'Pi 自动启动失败');
     } else if (event.payload?.status === 'exited') {
       desktopHasActivePiSession = false;
       updateConnectionStatus('disconnected');
-      messageRenderer.renderError('Pi process exited. Open Projects to start it again.');
+      messageRenderer.renderError('Pi 进程已退出，请打开“项目”重新启动。');
       showLauncher();
       launcher.load();
     }
@@ -3002,7 +3282,7 @@ async function initApp() {
     try {
       await ensureDefaultPiSession();
     } catch (error) {
-      const message = `Failed to auto-start Pi: ${error}`;
+      const message = `Pi 自动启动失败：${error}`;
       console.error('[Desktop] Failed to auto-start Pi:', error);
       desktopHasActivePiSession = false;
       updateConnectionStatus('idle');

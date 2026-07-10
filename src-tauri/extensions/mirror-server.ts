@@ -1,9 +1,9 @@
 /**
  * Mirror Server Extension
- * 
+ *
  * Starts a WebSocket + HTTP server inside the running Pi process,
  * allowing a browser to connect and mirror the TUI session in real-time.
- * 
+ *
  * - Forwards all Pi events to connected browser clients
  * - Accepts commands from the browser and executes them via the extension API
  * - Serves static files for the Tau web UI
@@ -16,6 +16,7 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { pathToFileURL } from "node:url";
 import QRCode from "qrcode";
 
 // Load tau settings from ~/.pi/agent/settings.json (falls back to env vars)
@@ -87,7 +88,7 @@ const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(USER_HOME, ".p
 const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(PI_AGENT_DIR, "sessions");
 const INSTANCES_DIR = path.join(USER_HOME, ".pi", "tau-instances");
 const MIRROR_PROTOCOL_VERSION = 2;
-const MIRROR_CAPABILITIES = ["new_session", "switch_session", "session_dir"];
+const MIRROR_CAPABILITIES = ["new_session", "switch_session", "session_dir", "file_preview", "open_in_editor"];
 
 // Instance registry — tracks all running Tau servers
 function registerInstance(port: number, sessionFile: string, cwd: string) {
@@ -1057,8 +1058,8 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
     // File preview — serve image bytes for thumbnail display in the browser
     if ((urlPath === "/api/file/preview" || urlPath.startsWith("/api/file/preview?")) && req.method === "GET") {
       const previewUrl = new URL(`http://localhost${req.url}`);
-      const filePath = previewUrl.searchParams.get("path");
-      if (!filePath) {
+      const requestedPath = previewUrl.searchParams.get("path");
+      if (!requestedPath) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "path required" }));
         return;
@@ -1067,6 +1068,14 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
         png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
         gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon",
       };
+      let filePath = "";
+      try {
+        filePath = resolveWorkspacePath(requestedPath);
+      } catch (err: any) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
       const ext = path.extname(filePath).toLowerCase().slice(1);
       const mimeType = IMAGE_PREVIEW_MIMES[ext];
       if (!mimeType) {
@@ -1081,6 +1090,27 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
         fs.createReadStream(filePath).pipe(res);
       } catch (err: any) {
         res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // File content — text source or a base64 image for the side-panel preview
+    if ((urlPath === "/api/file/content" || urlPath.startsWith("/api/file/content?")) && req.method === "GET") {
+      try {
+        const contentUrl = new URL(`http://localhost${req.url}`);
+        const requestedPath = contentUrl.searchParams.get("path");
+        if (!requestedPath) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "path required" }));
+          return;
+        }
+        const filePath = resolveWorkspacePath(requestedPath);
+        const content = readPreviewContent(filePath);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(content));
+      } catch (err: any) {
+        res.writeHead(err?.code === "OUTSIDE_WORKSPACE" ? 403 : 500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
       }
       return;
@@ -1149,7 +1179,7 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
       try {
         const filesUrl = new URL(`http://localhost${req.url}`);
         const explicitPath = filesUrl.searchParams.get("path");
-        let dirPath = explicitPath || process.cwd();
+        let dirPath = explicitPath || currentWorkspaceRoot();
         const activeCtx = getLatestCtx();
         if (!explicitPath && activeCtx) {
           try {
@@ -1158,7 +1188,7 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
             if (sessionEntry?.cwd) dirPath = sessionEntry.cwd;
           } catch {}
         }
-        serveFileList(res, dirPath);
+        serveFileList(res, resolveWorkspacePath(dirPath));
       } catch (err: any) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -1172,12 +1202,13 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
       req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
       req.on("end", async () => {
         try {
-          const { filePath: fp } = JSON.parse(body);
-          if (!fp || typeof fp !== "string") {
+          const { filePath: requestedPath } = JSON.parse(body);
+          if (!requestedPath || typeof requestedPath !== "string") {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "filePath required" }));
             return;
           }
+          const fp = resolveWorkspacePath(requestedPath);
           const { execFile } = await import("node:child_process");
           if (process.platform === "win32") {
             const { exec } = await import("node:child_process");
@@ -1198,6 +1229,30 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
           res.end(JSON.stringify({ ok: true }));
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // Open a workspace file or directory in Visual Studio Code.
+    if (urlPath === "/api/open-editor" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", async () => {
+        try {
+          const { filePath: requestedPath, line, column } = JSON.parse(body);
+          if (!requestedPath || typeof requestedPath !== "string") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "filePath required" }));
+            return;
+          }
+          const filePath = resolveWorkspacePath(requestedPath);
+          await openInVsCode(filePath, line, column);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err: any) {
+          res.writeHead(err?.code === "OUTSIDE_WORKSPACE" ? 403 : 500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err.message }));
         }
       });
@@ -1527,12 +1582,174 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
   // File browser
   // ═══════════════════════════════════════
 
+  const TEXT_PREVIEW_LIMIT = 1024 * 1024;
+  const IMAGE_PREVIEW_LIMIT = 8 * 1024 * 1024;
+
   const IGNORED_NAMES = new Set([
     "node_modules", ".git", "__pycache__", ".DS_Store", ".Trash",
     ".next", ".nuxt", "dist", "build", ".cache", ".turbo",
     "venv", ".venv", "env", ".env.local",
     ".pi", "coverage", ".nyc_output", ".parcel-cache",
   ]);
+
+  function currentWorkspaceRoot(): string {
+    const activeCtx = getLatestCtx();
+    if (activeCtx) {
+      try {
+        const entries = activeCtx.sessionManager.getEntries();
+        const sessionEntry = entries.find((entry: any) => entry.type === "session");
+        if (sessionEntry?.cwd) return path.resolve(sessionEntry.cwd);
+      } catch {}
+    }
+    return path.resolve(process.cwd());
+  }
+
+  function resolveWorkspacePath(requestedPath: string): string {
+    const root = fs.realpathSync(currentWorkspaceRoot());
+    const requested = fs.realpathSync(path.resolve(requestedPath || root));
+    const relative = path.relative(root, requested);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      const error: any = new Error("Requested path is outside the active workspace");
+      error.code = "OUTSIDE_WORKSPACE";
+      throw error;
+    }
+    return requested;
+  }
+
+  function readPreviewContent(filePath: string): any {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) throw new Error("Not a file");
+
+    const extension = path.extname(filePath).toLowerCase().slice(1);
+    const name = path.basename(filePath);
+    const language = previewLanguage(extension);
+    const imageMime = previewImageMime(extension);
+
+    if (imageMime) {
+      if (stat.size > IMAGE_PREVIEW_LIMIT) {
+        return unsupportedPreview(filePath, name, stat, language, "图片超过 8 MiB，请在 VS Code 中查看。");
+      }
+      return {
+        path: filePath,
+        name,
+        kind: "image",
+        mimeType: imageMime,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        content: fs.readFileSync(filePath).toString("base64"),
+        encoding: "base64",
+        truncated: false,
+        language,
+        reason: null,
+      };
+    }
+
+    const truncated = stat.size > TEXT_PREVIEW_LIMIT;
+    const fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(Math.min(stat.size, TEXT_PREVIEW_LIMIT));
+    try {
+      fs.readSync(fd, buffer, 0, buffer.length, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    let text: string | null = null;
+    for (let trim = 0; trim <= Math.min(3, buffer.length); trim++) {
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, buffer.length - trim));
+        break;
+      } catch {}
+    }
+    if (text == null) {
+      return unsupportedPreview(filePath, name, stat, language, "此文件不是可预览的 UTF-8 文本。");
+    }
+
+    return {
+      path: filePath,
+      name,
+      kind: "text",
+      mimeType: previewTextMime(extension),
+      size: stat.size,
+      mtime: stat.mtimeMs,
+      content: text,
+      encoding: "utf8",
+      truncated,
+      language,
+      reason: null,
+    };
+  }
+
+  function unsupportedPreview(filePath: string, name: string, stat: fs.Stats, language: string, reason: string): any {
+    return {
+      path: filePath,
+      name,
+      kind: "unsupported",
+      mimeType: "application/octet-stream",
+      size: stat.size,
+      mtime: stat.mtimeMs,
+      content: null,
+      encoding: null,
+      truncated: false,
+      language,
+      reason,
+    };
+  }
+
+  function previewImageMime(extension: string): string | null {
+    return ({
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp",
+      ico: "image/x-icon",
+    } as Record<string, string>)[extension] || null;
+  }
+
+  function previewTextMime(extension: string): string {
+    return ({
+      html: "text/html",
+      htm: "text/html",
+      css: "text/css",
+      js: "text/javascript",
+      mjs: "text/javascript",
+      cjs: "text/javascript",
+      json: "application/json",
+      svg: "image/svg+xml",
+      md: "text/markdown",
+      markdown: "text/markdown",
+    } as Record<string, string>)[extension] || "text/plain";
+  }
+
+  function previewLanguage(extension: string): string {
+    return ({
+      js: "javascript", mjs: "javascript", cjs: "javascript",
+      ts: "typescript", mts: "typescript", cts: "typescript",
+      jsx: "jsx", tsx: "tsx", rs: "rust", py: "python", go: "go",
+      rb: "ruby", java: "java", kt: "kotlin", kts: "kotlin", swift: "swift",
+      html: "html", htm: "html", css: "css", scss: "scss", json: "json",
+      yaml: "yaml", yml: "yaml", toml: "toml", xml: "xml", svg: "xml",
+      md: "markdown", markdown: "markdown", sh: "shell", bash: "shell", zsh: "shell",
+    } as Record<string, string>)[extension] || "text";
+  }
+
+  async function openInVsCode(filePath: string, line?: number, column?: number): Promise<void> {
+    let uri = `vscode://file${pathToFileURL(filePath).pathname}`;
+    if (Number.isFinite(line)) {
+      uri += `:${Math.max(1, Number(line))}:${Math.max(1, Number(column) || 1)}`;
+    }
+    const { execFile } = await import("node:child_process");
+    await new Promise<void>((resolve, reject) => {
+      const done = (error: Error | null) => error ? reject(error) : resolve();
+      if (process.platform === "win32") {
+        execFile("cmd", ["/c", "start", "", uri], { windowsHide: true }, done);
+      } else if (process.platform === "darwin") {
+        execFile("open", [uri], done);
+      } else {
+        execFile("xdg-open", [uri], done);
+      }
+    });
+  }
 
   function serveFileList(res: http.ServerResponse, dirPath: string) {
     try {

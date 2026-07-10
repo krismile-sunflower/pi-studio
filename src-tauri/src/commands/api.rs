@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use url::Url;
 
-use crate::commands::files::{list_files_inner, open_path};
+use crate::commands::files::{
+    canonical_workspace_path, list_files_inner, open_in_vscode, open_path, read_file_content,
+};
 use crate::commands::sessions::{
     delete_session, empty_sessions, live_tau_instances, search_sessions, session_file,
 };
@@ -94,7 +96,14 @@ fn is_desktop_local_path(path: &str) -> bool {
     let path = parsed.path();
     matches!(
         path,
-        "/api/health" | "/api/projects" | "/api/instances" | "/api/projects/launch"
+        "/api/health"
+            | "/api/projects"
+            | "/api/instances"
+            | "/api/projects/launch"
+            | "/api/files"
+            | "/api/file/content"
+            | "/api/open"
+            | "/api/open-editor"
     ) || path == "/api/search"
         || path == "/api/sessions"
         || path == "/api/sessions/delete"
@@ -173,15 +182,29 @@ async fn local_response(
             })
         }
         ("GET", "/api/files") => {
-            let dir = parsed
+            let root = workspace_root_for_request(&state, &request)?;
+            let requested = parsed
                 .query_pairs()
                 .find(|(key, _)| key == "path")
-                .map(|(_, value)| PathBuf::from(value.to_string()));
+                .map(|(_, value)| PathBuf::from(value.to_string()))
+                .unwrap_or_else(|| root.clone());
+            let dir = canonical_workspace_path(&root, &requested)?;
             serde_json::to_value(
-                list_files_inner(dir)
+                list_files_inner(Some(dir))
                     .map_err(|err| format!("Failed to list files through local fallback: {err}"))?,
             )
             .map_err(|err| err.to_string())?
+        }
+        ("GET", "/api/file/content") => {
+            let root = workspace_root_for_request(&state, &request)?;
+            let requested = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "path")
+                .map(|(_, value)| PathBuf::from(value.to_string()))
+                .ok_or_else(|| "Missing file path".to_string())?;
+            let file_path = canonical_workspace_path(&root, &requested)?;
+            serde_json::to_value(read_file_content(&file_path)?)
+                .map_err(|err| err.to_string())?
         }
         ("POST", "/api/open") => {
             let body = request
@@ -190,8 +213,30 @@ async fn local_response(
                 .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
                 .unwrap_or_default();
             if let Some(file_path) = body.get("filePath").and_then(|value| value.as_str()) {
-                open_path(&app, &PathBuf::from(file_path))?;
+                let root = workspace_root_for_request(&state, &request)?;
+                let file_path = canonical_workspace_path(&root, &PathBuf::from(file_path))?;
+                open_path(&app, &file_path)?;
             }
+            json!({ "ok": true })
+        }
+        ("POST", "/api/open-editor") => {
+            let body = request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .unwrap_or_default();
+            let file_path = body
+                .get("filePath")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "Missing file path".to_string())?;
+            let root = workspace_root_for_request(&state, &request)?;
+            let file_path = canonical_workspace_path(&root, &PathBuf::from(file_path))?;
+            let line = body.get("line").and_then(|value| value.as_u64()).map(|value| value as u32);
+            let column = body
+                .get("column")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as u32);
+            open_in_vscode(&app, &file_path, line, column)?;
             json!({ "ok": true })
         }
         ("GET", "/api/projects") => {
@@ -388,7 +433,7 @@ async fn local_rpc_response(
             &command_type,
             json!({
                 "mirrorProtocolVersion": 2,
-                "capabilities": ["new_session", "switch_session", "session_dir"]
+                "capabilities": ["new_session", "switch_session", "session_dir", "file_preview", "open_in_editor"]
             }),
         ),
         "get_auth" => rpc_success(
@@ -449,6 +494,15 @@ fn active_rpc_pid(state: &State<'_, AppState>, request: &ApiRequest) -> Result<u
         return Err("Active Pi session is not using native RPC.".to_string());
     }
     Ok(instance.pid)
+}
+
+fn workspace_root_for_request(
+    state: &State<'_, AppState>,
+    request: &ApiRequest,
+) -> Result<PathBuf, String> {
+    active_instance_for_request(state, request)
+        .map(|instance| PathBuf::from(instance.project_path))
+        .ok_or_else(|| "No active workspace is available".to_string())
 }
 
 async fn augment_rpc_response(

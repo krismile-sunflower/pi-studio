@@ -1,5 +1,6 @@
 /**
- * Dialogs - Handles extension UI dialogs
+ * Dialogs — extension UI dialogs with keyboard and focus management.
+ * Response payloads remain compatible with the existing extension protocol.
  */
 
 export class DialogHandler {
@@ -8,193 +9,151 @@ export class DialogHandler {
     this.wsClient = wsClient;
     this.currentDialog = null;
     this.timeoutId = null;
+    this.previousFocus = null;
+    this.keydownHandler = null;
   }
 
   showSelect(request) {
     this.clearCurrentDialog();
-
     const { id, title, options, timeout } = request;
-
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
     dialog.innerHTML = `
-      <div class="dialog-title">${this.escapeHtml(title || 'Select an option')}</div>
+      <div class="dialog-title">${this.escapeHtml(title || '请选择')}</div>
       <div class="dialog-options" id="dialog-options"></div>
-      <div class="dialog-actions">
-        <button id="dialog-cancel">Cancel</button>
-      </div>
-    `;
+      <div class="dialog-actions"><button type="button" id="dialog-cancel">取消</button></div>`;
 
     const optionsContainer = dialog.querySelector('#dialog-options');
-    
-    (options || []).forEach(option => {
-      const optionDiv = document.createElement('div');
-      optionDiv.className = 'dialog-option';
-      optionDiv.textContent = option;
-      optionDiv.onclick = () => {
-        this.respond(id, { value: option });
-      };
-      optionsContainer.appendChild(optionDiv);
+    (options || []).forEach((option) => {
+      const optionButton = document.createElement('button');
+      optionButton.type = 'button';
+      optionButton.className = 'dialog-option';
+      optionButton.textContent = option;
+      optionButton.addEventListener('click', () => this.respond(id, { value: option }));
+      optionsContainer.appendChild(optionButton);
     });
-
-    dialog.querySelector('#dialog-cancel').onclick = () => {
-      this.respond(id, { cancelled: true });
-    };
-
+    dialog.querySelector('#dialog-cancel').addEventListener('click', () => this.respond(id, { cancelled: true }));
     this.showDialog(dialog, timeout, id);
   }
 
   showConfirm(request) {
     this.clearCurrentDialog();
-
-    const { id, title, message, timeout } = request;
-
+    const { id, title, message, timeout, destructive } = request;
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
     dialog.innerHTML = `
-      <div class="dialog-title">${this.escapeHtml(title || 'Confirm')}</div>
+      <div class="dialog-title">${this.escapeHtml(title || '确认操作')}</div>
       ${message ? `<div class="dialog-message">${this.escapeHtml(message)}</div>` : ''}
       <div class="dialog-actions">
-        <button id="dialog-no">No</button>
-        <button id="dialog-yes">Yes</button>
-      </div>
-    `;
-
-    dialog.querySelector('#dialog-yes').onclick = () => {
-      this.respond(id, { confirmed: true });
-    };
-
-    dialog.querySelector('#dialog-no').onclick = () => {
-      this.respond(id, { confirmed: false });
-    };
-
-    this.showDialog(dialog, timeout, id);
+        <button type="button" id="dialog-no">取消</button>
+        <button type="button" id="dialog-yes" class="${destructive ? 'danger' : 'primary'}">确认</button>
+      </div>`;
+    dialog.querySelector('#dialog-yes').addEventListener('click', () => this.respond(id, { confirmed: true }));
+    dialog.querySelector('#dialog-no').addEventListener('click', () => this.respond(id, { confirmed: false }));
+    this.showDialog(dialog, timeout, id, () => dialog.querySelector('#dialog-yes')?.click());
   }
 
   showInput(request) {
     this.clearCurrentDialog();
-
     const { id, title, placeholder, timeout } = request;
-
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
     dialog.innerHTML = `
-      <div class="dialog-title">${this.escapeHtml(title || 'Input')}</div>
-      <input type="text" class="dialog-input" id="dialog-input" placeholder="${this.escapeHtml(placeholder || '')}" />
-      <div class="dialog-actions">
-        <button id="dialog-cancel">Cancel</button>
-        <button id="dialog-submit">Submit</button>
-      </div>
-    `;
-
+      <div class="dialog-title">${this.escapeHtml(title || '输入内容')}</div>
+      <input type="text" class="dialog-input" id="dialog-input" placeholder="${this.escapeHtml(placeholder || '')}">
+      <div class="dialog-actions"><button type="button" id="dialog-cancel">取消</button><button type="button" id="dialog-submit" class="primary">提交</button></div>`;
     const input = dialog.querySelector('#dialog-input');
-    
     const submit = () => {
       const value = input.value.trim();
       this.respond(id, value ? { value } : { cancelled: true });
     };
-
-    input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') submit();
-    });
-
-    dialog.querySelector('#dialog-submit').onclick = submit;
-    dialog.querySelector('#dialog-cancel').onclick = () => {
-      this.respond(id, { cancelled: true });
-    };
-
-    this.showDialog(dialog, timeout, id);
-    
-    // Focus input after a short delay
-    setTimeout(() => input.focus(), 100);
+    dialog.querySelector('#dialog-submit').addEventListener('click', submit);
+    dialog.querySelector('#dialog-cancel').addEventListener('click', () => this.respond(id, { cancelled: true }));
+    this.showDialog(dialog, timeout, id, submit, input);
   }
 
   showEditor(request) {
     this.clearCurrentDialog();
-
     const { id, title, prefill, timeout } = request;
-
     const dialog = document.createElement('div');
-    dialog.className = 'dialog';
+    dialog.className = 'dialog dialog-editor';
     dialog.innerHTML = `
-      <div class="dialog-title">${this.escapeHtml(title || 'Editor')}</div>
+      <div class="dialog-title">${this.escapeHtml(title || '编辑内容')}</div>
       <textarea class="dialog-textarea" id="dialog-textarea">${this.escapeHtml(prefill || '')}</textarea>
-      <div class="dialog-actions">
-        <button id="dialog-cancel">Cancel</button>
-        <button id="dialog-save">Save</button>
-      </div>
-    `;
-
+      <div class="dialog-actions"><button type="button" id="dialog-cancel">取消</button><button type="button" id="dialog-save" class="primary">保存</button></div>`;
     const textarea = dialog.querySelector('#dialog-textarea');
-
-    dialog.querySelector('#dialog-save').onclick = () => {
-      const value = textarea.value;
-      this.respond(id, value ? { value } : { cancelled: true });
-    };
-
-    dialog.querySelector('#dialog-cancel').onclick = () => {
-      this.respond(id, { cancelled: true });
-    };
-
-    this.showDialog(dialog, timeout, id);
-    
-    // Focus textarea after a short delay
-    setTimeout(() => textarea.focus(), 100);
+    const save = () => this.respond(id, textarea.value ? { value: textarea.value } : { cancelled: true });
+    dialog.querySelector('#dialog-save').addEventListener('click', save);
+    dialog.querySelector('#dialog-cancel').addEventListener('click', () => this.respond(id, { cancelled: true }));
+    this.showDialog(dialog, timeout, id, null, textarea);
   }
 
   showNotification(request) {
     const { message, notifyType } = request;
-    
-    // Create a temporary notification element
-    const notification = document.createElement('div');
-    notification.className = 'error-message';
-    notification.textContent = `${notifyType === 'error' ? '⚠️' : notifyType === 'warning' ? '⚠️' : 'ℹ️'} ${message}`;
-    
-    // Add to messages container temporarily
-    const messagesContainer = document.getElementById('messages');
-    if (messagesContainer) {
-      messagesContainer.appendChild(notification);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      
-      // Remove after 5 seconds
-      setTimeout(() => {
-        notification.remove();
-      }, 5000);
-    }
+    window.dispatchEvent(new CustomEvent('pi-studio:toast', {
+      detail: {
+        title: notifyType === 'error' ? '扩展执行失败' : notifyType === 'warning' ? '扩展提醒' : '扩展通知',
+        message,
+        type: notifyType === 'error' ? 'error' : notifyType === 'warning' ? 'warning' : 'info',
+      },
+    }));
   }
 
-  showDialog(dialogElement, timeout, requestId) {
+  showDialog(dialogElement, timeout, requestId, onEnter = null, preferredFocus = null) {
+    this.previousFocus = document.activeElement;
     this.currentDialog = dialogElement;
-    this.container.innerHTML = '';
-    this.container.appendChild(dialogElement);
+    dialogElement.setAttribute('role', 'dialog');
+    dialogElement.setAttribute('aria-modal', 'true');
+    this.container.replaceChildren(dialogElement);
     this.container.classList.remove('hidden');
 
-    // Set up timeout if specified
-    if (timeout) {
-      this.timeoutId = setTimeout(() => {
+    this.keydownHandler = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
         this.respond(requestId, { cancelled: true });
-      }, timeout);
+        return;
+      }
+      if (event.key === 'Enter' && onEnter && event.target.tagName !== 'TEXTAREA') {
+        event.preventDefault();
+        onEnter();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...dialogElement.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')];
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', this.keydownHandler, true);
+    requestAnimationFrame(() => (preferredFocus || dialogElement.querySelector('button, input, textarea'))?.focus());
+
+    if (timeout) {
+      this.timeoutId = setTimeout(() => this.respond(requestId, { cancelled: true }), timeout);
     }
   }
 
   clearCurrentDialog() {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
-    
-    this.container.innerHTML = '';
+    if (this.timeoutId) clearTimeout(this.timeoutId);
+    if (this.keydownHandler) document.removeEventListener('keydown', this.keydownHandler, true);
+    this.timeoutId = null;
+    this.keydownHandler = null;
+    this.container.replaceChildren();
     this.container.classList.add('hidden');
     this.currentDialog = null;
+    this.previousFocus?.focus?.();
+    this.previousFocus = null;
   }
 
   respond(id, response) {
     this.clearCurrentDialog();
-    this.wsClient.send({
-      type: 'extension_ui_response',
-      id,
-      ...response
-    });
+    this.wsClient.send({ type: 'extension_ui_response', id, ...response });
   }
 
   escapeHtml(text) {

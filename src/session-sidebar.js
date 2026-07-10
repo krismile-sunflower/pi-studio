@@ -102,7 +102,7 @@ export class SessionSidebar {
         const existing = merged.get(key);
         if (project.noFolder) {
           existing.noFolder = true;
-          existing.displayName = project.displayName || 'No folder';
+          existing.displayName = project.displayName || '无文件夹';
           existing.path = project.path || existing.path;
         }
         const seenFiles = new Set((existing.sessions || []).map(session => session.filePath || session.file));
@@ -183,12 +183,14 @@ export class SessionSidebar {
       const item = document.createElement('div');
       item.className = 'session-item search-result-item';
       item.dataset.filePath = result.filePath;
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
 
       if (result.filePath === this.activeSessionFile) {
         item.classList.add('active');
       }
 
-      const title = result.sessionName || result.firstMessage || 'Untitled';
+      const title = result.sessionName || result.firstMessage || '未命名会话';
       const snippet = result.matches[0]?.snippet || '';
       const matchCount = result.matches.length;
       const time = this.formatTime(result.sessionTimestamp);
@@ -202,7 +204,7 @@ export class SessionSidebar {
       `;
 
       // Find the matching project/session to pass to onSessionSelect
-      item.addEventListener('click', () => {
+      const selectResult = () => {
         for (const project of this.projects) {
           const session = project.sessions.find(s => s.filePath === result.filePath);
           if (session) {
@@ -212,6 +214,13 @@ export class SessionSidebar {
         }
         // Session not in loaded list, try switching by path.
         this.onSessionSelect({ filePath: result.filePath, name: result.sessionName }, { path: result.project });
+      };
+      item.addEventListener('click', selectResult);
+      item.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          selectResult();
+        }
       });
 
       sessionsDiv.appendChild(item);
@@ -278,9 +287,7 @@ export class SessionSidebar {
     this.container.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
   }
 
-  // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-  // Context Menu
-  // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+  // Context menu
 
   showContextMenu(e, session, project, itemEl) {
     e.preventDefault();
@@ -291,15 +298,16 @@ export class SessionSidebar {
     menu.className = 'session-context-menu';
 
     const items = [
-      { icon: isFav ? '*' : '+', label: isFav ? '取消收藏' : '收藏', action: () => this.toggleFavourite(session.filePath) },
-      { icon: 'T', label: '重命名', action: () => this.startRename(itemEl) },
-      { icon: 'E', label: '导出 HTML', action: () => this.exportSession(session) },
-      { icon: 'D', label: '删除', action: () => this.deleteSession(session, itemEl) },
+      { icon: isFav ? '★' : '☆', label: isFav ? '取消收藏' : '收藏', action: () => this.toggleFavourite(session.filePath) },
+      { icon: '✎', label: '重命名', action: () => this.startRename(itemEl) },
+      { icon: '↗', label: '导出 HTML', action: () => this.exportSession(session) },
+      { icon: '×', label: '删除', danger: true, action: () => this.deleteSession(session, itemEl) },
     ];
 
     for (const item of items) {
-      const row = document.createElement('div');
-      row.className = 'context-menu-item';
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `context-menu-item${item.danger ? ' danger' : ''}`;
       row.innerHTML = `<span class="context-menu-icon">${item.icon}</span>${item.label}`;
       row.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -387,9 +395,11 @@ export class SessionSidebar {
           this.clearActive();
           if (this.onSessionSelect) this.onSessionSelect(null, null);
         }
+        window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title: '会话已删除', type: 'success' } }));
       }
     } catch (e) {
       console.error('[Sidebar] Delete failed:', e);
+      window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title: '删除会话失败', message: String(e), type: 'error' } }));
     }
   }
 
@@ -402,18 +412,21 @@ export class SessionSidebar {
       })).json();
       if (data?.success && data.data?.path) {
         window.open(`/api/sessions/${encodeURIComponent(data.data.path)}`);
+        window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title: '会话已导出', message: data.data.path, type: 'success' } }));
       }
-    } catch { /* silent */ }
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title: '导出失败', message: String(error), type: 'error' } }));
+    }
   }
 
-  // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
   // Render
-  // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
   buildSessionItem(session, project) {
     const item = document.createElement('div');
     item.className = 'session-item';
     item.dataset.filePath = session.filePath;
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
 
     if (session.filePath === this.activeSessionFile) {
       item.classList.add('active');
@@ -423,7 +436,7 @@ export class SessionSidebar {
     const time = this.formatTime(session.timestamp);
     const tmuxTag = session.tmux ? '<span class="session-tag tmux-tag">tmux</span>' : '';
     const liveTag = session.live ? '<span class="session-tag live-tag">live</span>' : '';
-    const favIcon = this.isFavourite(session.filePath) ? '<span class="session-fav-icon">*</span>' : '';
+    const favIcon = this.isFavourite(session.filePath) ? '<span class="session-fav-icon">★</span>' : '';
 
     item.innerHTML = `
       <div class="session-title-row">
@@ -436,6 +449,12 @@ export class SessionSidebar {
     `;
 
     item.addEventListener('click', () => this.onSessionSelect(session, project));
+    item.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.onSessionSelect(session, project);
+      }
+    });
     item.addEventListener('contextmenu', (e) => this.showContextMenu(e, session, project, item));
 
     return item;
@@ -465,7 +484,7 @@ export class SessionSidebar {
 
       const header = document.createElement('div');
       header.className = 'project-header favourites-header';
-      header.innerHTML = `<span class="fav-star">*</span> <span>收藏</span> <span class="project-count">${favSessions.length}</span>`;
+      header.innerHTML = `<span class="fav-star">★</span> <span>收藏</span> <span class="project-count">${favSessions.length}</span>`;
       favGroup.appendChild(header);
 
       const sessionsDiv = document.createElement('div');
@@ -489,7 +508,7 @@ export class SessionSidebar {
 
       const projectPath = project.path || '';
       const pathParts = projectPath.split(/[\\/]/).filter(Boolean);
-      const shortPath = project.displayName || (project.noFolder ? 'No folder' : (pathParts.length > 0 ? pathParts[pathParts.length - 1] : projectPath));
+      const shortPath = project.displayName || (project.noFolder ? '无文件夹' : (pathParts.length > 0 ? pathParts[pathParts.length - 1] : projectPath));
 
       header.innerHTML = `
         <span class="chevron">&rsaquo;</span>
