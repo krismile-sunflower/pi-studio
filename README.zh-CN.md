@@ -21,6 +21,7 @@ English README: [README.md](README.md)
 ## 环境要求
 
 - Node.js 20+。
+- pnpm 10+（建议通过 Corepack 启用）。
 - Rust stable toolchain。
 - 当前平台所需的 Tauri v2 构建依赖。
 - 构建机器上已经安装并可运行 Pi：
@@ -36,27 +37,34 @@ pi --version
 安装依赖：
 
 ```bash
-npm install
+pnpm install
 npm install --omit=dev --prefix ./src-tauri/extensions
 ```
 
 启动开发模式：
 
 ```bash
-npm run tauri:dev
+pnpm tauri:dev
 ```
 
 如果 Vite 已经在 `127.0.0.1:1420` 运行，可以复用它：
 
 ```bash
-npm run tauri:dev:reuse
+pnpm tauri:dev:reuse
 ```
 
 前端构建：
 
 ```bash
-npm run build
+pnpm build
+pnpm typecheck
+pnpm test
 ```
+
+前端现使用 React 19 + TypeScript，由 Vite 构建。`src/app` 存放类型化应用
+控制器与状态层，`src/components` 存放工作台视图，`src/lib` 维护 Tauri、API
+与传输协议。根前端统一使用 pnpm；随应用打包的旧 mirror 扩展仍保持独立的
+npm 安装，因为 Pi 会把该资源作为独立包加载。
 
 Rust 检查：
 
@@ -102,7 +110,7 @@ NODE_BIN="$(command -v node)" PI_PACKAGE="$(npm root -g)/@earendil-works/pi-codi
 开发调试时可以覆盖 Pi 可执行文件：
 
 ```bash
-PI_DESKTOP_CLI=/path/to/pi npm run tauri:dev
+PI_DESKTOP_CLI=/path/to/pi pnpm tauri:dev
 ```
 
 ## 发布构建
@@ -128,7 +136,7 @@ macOS/Linux：
 手动 debug 打包：
 
 ```bash
-npx tauri build --debug
+pnpm exec tauri build --debug
 ```
 
 Windows 上如果 `target/debug/pi-studio.exe` 正在运行，打包会因为无法覆盖 exe 而失败。关闭正在运行的 pi-studio 后重新执行即可。
@@ -171,10 +179,10 @@ npm install --omit=dev
 推荐检查：
 
 ```powershell
-npm run build
+pnpm build
 cargo check --manifest-path .\src-tauri\Cargo.toml
 .\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\pi-studio -Port 3991 -TimeoutSeconds 45
-npx tauri build --debug
+pnpm exec tauri build --debug
 ```
 
 macOS/Linux 请在目标平台执行：
@@ -202,7 +210,7 @@ Windows 打包提示无法覆盖 `pi-studio.exe`：
 
 - 关闭正在运行的 pi-studio 窗口。
 - 在任务管理器中确认没有 `pi-studio.exe`。
-- 重新执行 `npx tauri build --debug`。
+- 重新执行 `pnpm exec tauri build --debug`。
 
 ## 说明
 

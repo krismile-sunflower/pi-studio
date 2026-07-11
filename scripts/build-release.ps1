@@ -14,7 +14,7 @@ if (-not $SkipVendorPi -or $VendorPi) {
   & "$PSScriptRoot\vendor-pi-sidecar-windows.ps1"
 }
 
-npm install
+pnpm install --frozen-lockfile
 npm install --omit=dev --prefix "$root\src-tauri\extensions"
 
 if ($Smoke) {
@@ -22,7 +22,7 @@ if ($Smoke) {
 }
 
 if ($Debug) {
-  npx tauri build --debug
+  pnpm exec tauri build --debug
 } else {
-  npx tauri build
+  pnpm exec tauri build
 }

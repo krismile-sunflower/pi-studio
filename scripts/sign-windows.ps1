@@ -15,7 +15,7 @@ $artifacts = @(
 ) | Where-Object { Test-Path $_ }
 
 if (-not $artifacts) {
-  throw "No pi-studio installers found. Run npx tauri build first."
+  throw "No pi-studio installers found. Run pnpm exec tauri build first."
 }
 
 $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue

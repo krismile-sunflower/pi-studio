@@ -1,11 +1,11 @@
 {
   "name": "pi-studio",
   "short_name": "pi-studio",
-  "description": "Web UI for pi coding agent",
+  "description": "React desktop workbench for the Pi coding agent",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f5f3ef",
-  "theme_color": "#f5f3ef",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
   "orientation": "any",
   "icons": [
     {

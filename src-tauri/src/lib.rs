@@ -54,6 +54,38 @@ pub struct AppState {
     pub ws_sender: Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>,
 }
 
+
+fn register_global_shortcuts(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let gs = app.global_shortcut();
+
+    if let Err(error) = gs.on_shortcut("Ctrl+Alt+T", |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            tray::toggle_window(app);
+        }
+    }) {
+        settings::append_desktop_log(format!(
+            "skipped global shortcut Ctrl+Alt+T: {error}"
+        ));
+    } else {
+        settings::append_desktop_log("registered global shortcut Ctrl+Alt+T");
+    }
+
+    if let Err(error) = gs.on_shortcut("Ctrl+Alt+N", |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            let _ = tauri::Emitter::emit(app, "pi-studio-command", "show-launcher");
+            tray::show_window(app);
+        }
+    }) {
+        settings::append_desktop_log(format!(
+            "skipped global shortcut Ctrl+Alt+N: {error}"
+        ));
+    } else {
+        settings::append_desktop_log("registered global shortcut Ctrl+Alt+N");
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -64,26 +96,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--from-autostart"]),
         ))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts(["Ctrl+Alt+T", "Ctrl+Alt+N"])
-                .expect("failed to configure global shortcuts")
-                .with_handler(|app, shortcut, event| {
-                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        return;
-                    }
-
-                    match shortcut.into_string().as_str() {
-                        "Ctrl+Alt+T" => tray::toggle_window(app),
-                        "Ctrl+Alt+N" => {
-                            let _ = tauri::Emitter::emit(app, "pi-studio-command", "show-launcher");
-                            tray::show_window(app);
-                        }
-                        _ => {}
-                    }
-                })
-                .build(),
-        )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::api::api_request,
             commands::desktop::get_desktop_settings,
@@ -113,6 +126,12 @@ pub fn run() {
         .setup(|app| {
             tray::install(app.handle())?;
             tray::install_menu(app.handle())?;
+            register_global_shortcuts(app.handle());
+            // Align native title/menu bar with the app's default dark chrome until
+            // the frontend applies the saved theme.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_theme(Some(tauri::Theme::Dark));
+            }
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 settings::append_desktop_log("setup auto-start task entered");

@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "app.pi.studio",
   "build": {
-    "beforeDevCommand": "npm run dev:desktop",
-    "beforeBuildCommand": "npm run build:desktop",
+    "beforeDevCommand": "pnpm dev:desktop",
+    "beforeBuildCommand": "pnpm build:desktop",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },
@@ -17,7 +17,8 @@
         "height": 820,
         "minWidth": 960,
         "minHeight": 640,
-        "resizable": true
+        "resizable": true,
+        "theme": "Dark"
       }
     ],
     "security": {

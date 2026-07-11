@@ -22,6 +22,7 @@ pi-studio is a Tauri desktop client for Pi. Its web UI is built with reference t
 ## Requirements
 
 - Node.js 20+.
+- pnpm 10+ (Corepack is recommended).
 - Rust stable toolchain.
 - Tauri v2 prerequisites for your platform.
 - A working local Pi install on the build machine:
@@ -37,28 +38,37 @@ The final installed app does not require the end user to start `pi` manually.
 Install dependencies:
 
 ```bash
-npm install
+pnpm install
 npm install --omit=dev --prefix ./src-tauri/extensions
 ```
 
 Start the app in development:
 
 ```bash
-npm run tauri:dev
+pnpm tauri:dev
 ```
 
 If Vite is already running on `127.0.0.1:1420`, reuse it:
 
 ```bash
-npm run tauri:dev:reuse
+pnpm tauri:dev:reuse
 ```
 
 Useful frontend commands:
 
 ```bash
-npm run build
-npm run preview
+pnpm build
+pnpm preview
+pnpm typecheck
+pnpm test
 ```
+
+The frontend is a React 19 + TypeScript application built by Vite. `src/app`
+contains the typed application controller/store, `src/components` contains the
+workbench views, and `src/lib` owns the Tauri/API/transport contracts. pnpm is
+the only package manager for the root frontend; the bundled legacy mirror
+extension keeps its isolated npm install because Pi loads that resource as a
+standalone package.
 
 Useful backend check:
 
@@ -104,13 +114,13 @@ NODE_BIN="$(command -v node)" PI_PACKAGE="$(npm root -g)/@earendil-works/pi-codi
 Development override:
 
 ```bash
-PI_DESKTOP_CLI=/path/to/pi npm run tauri:dev
+PI_DESKTOP_CLI=/path/to/pi pnpm tauri:dev
 ```
 
 Legacy mirror/WebSocket transport is still available for compatibility:
 
 ```bash
-PI_DESKTOP_TRANSPORT=mirror npm run tauri:dev
+PI_DESKTOP_TRANSPORT=mirror pnpm tauri:dev
 ```
 
 ## Release Builds
@@ -136,7 +146,7 @@ macOS/Linux:
 Manual debug build:
 
 ```bash
-npx tauri build --debug
+pnpm exec tauri build --debug
 ```
 
 Generated installers use the `pi-studio` product name. On Windows, if `target/debug/pi-studio.exe` is currently running, close the app before rebuilding because Windows will not overwrite a running executable.
@@ -179,10 +189,10 @@ New Pi sessions pick up installed extensions, so restart Pi or open a new projec
 Recommended checks:
 
 ```powershell
-npm run build
+pnpm build
 cargo check --manifest-path .\src-tauri\Cargo.toml
 .\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\pi-studio -Port 3991 -TimeoutSeconds 45
-npx tauri build --debug
+pnpm exec tauri build --debug
 ```
 
 The smoke script checks native Pi RPC by default. Add `-Mirror` to run the legacy Tau mirror health check as well.
@@ -212,7 +222,7 @@ If Windows debug build cannot overwrite `pi-studio.exe`:
 
 - Close the running pi-studio window.
 - Check Task Manager for `pi-studio.exe`.
-- Run `npx tauri build --debug` again.
+- Run `pnpm exec tauri build --debug` again.
 
 ## Notes
 

@@ -24,7 +24,7 @@ if [[ "$SKIP_VENDOR_PI" -eq 0 ]]; then
   "$ROOT/scripts/vendor-pi-sidecar-unix.sh"
 fi
 
-npm install
+pnpm install --frozen-lockfile
 npm install --omit=dev --prefix "$ROOT/src-tauri/extensions"
 
 if [[ "$SMOKE" -eq 1 ]]; then
@@ -32,7 +32,7 @@ if [[ "$SMOKE" -eq 1 ]]; then
 fi
 
 if [[ "$DEBUG" -eq 1 ]]; then
-  npx tauri build --debug
+  pnpm exec tauri build --debug
 else
-  npx tauri build
+  pnpm exec tauri build
 fi
