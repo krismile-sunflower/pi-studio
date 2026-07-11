@@ -1,10 +1,11 @@
 use std::env;
-use std::fs::{create_dir_all, File};
+use std::fs::{self, create_dir_all, File};
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -36,7 +37,24 @@ pub struct PiRuntimeInfo {
     pub pi_version: Option<String>,
     pub bundled: bool,
     pub error: Option<String>,
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    pub can_update_system: bool,
+    pub can_update_bundled: bool,
+    pub update_channel: String,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiUpdateResult {
+    pub ok: bool,
+    pub message: String,
+    pub previous_version: Option<String>,
+    pub new_version: Option<String>,
+    pub channel: String,
+    pub log: String,
+}
+
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,29 +88,103 @@ pub async fn get_pi_runtime_info(app: AppHandle) -> Result<PiRuntimeInfo, String
         &pi_command.program,
         &pi_command.initial_args,
         &["--version"],
-    );
+    )
+    .and_then(|text| extract_semver(&text));
     let is_override = env::var("PI_DESKTOP_CLI").is_ok();
+    let source = if is_override {
+        "override".to_string()
+    } else if pi_command.is_system_fallback {
+        "system".to_string()
+    } else {
+        "bundled".to_string()
+    };
     let error = if !pi_command.is_system_fallback && pi_version.is_none() {
         Some("Bundled Pi was found, but version check failed.".to_string())
     } else {
         None
     };
+    let can_update_bundled = source == "bundled" && bundled_platform_dir(&app).is_some_and(|dir| is_dir_writable(&dir));
+    let can_update_system = source == "system";
 
     Ok(PiRuntimeInfo {
-        source: if is_override {
-            "override".into()
-        } else if pi_command.is_system_fallback {
-            "system".into()
-        } else {
-            "bundled".into()
-        },
+        source: source.clone(),
         platform,
         command: pi_command.display,
         node_version,
         pi_version,
         bundled: !pi_command.is_system_fallback && !is_override,
         error,
+        latest_version: None,
+        update_available: false,
+        can_update_system,
+        can_update_bundled,
+        update_channel: source,
     })
+}
+
+#[tauri::command]
+pub async fn check_pi_update(app: AppHandle) -> Result<PiRuntimeInfo, String> {
+    let mut info = get_pi_runtime_info(app).await?;
+    let latest = fetch_latest_pi_version().await;
+    info.latest_version = latest.clone();
+    info.update_available = match (&info.pi_version, &latest) {
+        (Some(current), Some(latest_version)) => is_version_newer(latest_version, current),
+        _ => false,
+    };
+    if info.latest_version.is_none() {
+        info.error = Some(
+            info.error
+                .unwrap_or_else(|| "无法获取最新 Pi 版本，请检查网络。".into()),
+        );
+    }
+    Ok(info)
+}
+
+#[tauri::command]
+pub async fn update_pi_runtime(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PiUpdateResult, String> {
+    let info = get_pi_runtime_info(app.clone()).await?;
+    let previous = info.pi_version.clone();
+    let channel = info.update_channel.clone();
+
+    // Stop managed Pi processes so files/binaries are not locked.
+    let running = running_instances_for_current_transport(state.inner());
+    for instance in &running {
+        let _ = stop_pi_inner(state.inner(), Some(instance.pid));
+    }
+
+    let result = match channel.as_str() {
+        "system" => update_system_pi().await,
+        "bundled" => update_bundled_pi(&app).await,
+        "override" => Err(
+            "当前使用 PI_DESKTOP_CLI 覆盖路径，请手动更新该可执行文件或取消环境变量。".into(),
+        ),
+        other => Err(format!("当前运行时通道 `{other}` 不支持应用内更新。")),
+    };
+
+    match result {
+        Ok(log) => {
+            let refreshed = get_pi_runtime_info(app).await.ok();
+            Ok(PiUpdateResult {
+                ok: true,
+                message: "Pi 已更新，请重新打开项目以使用新版本。".into(),
+                previous_version: previous,
+                new_version: refreshed.and_then(|info| info.pi_version),
+                channel,
+                log,
+            })
+        }
+        Err(error) => Ok(PiUpdateResult {
+            ok: false,
+            message: error.clone(),
+            previous_version: previous,
+            new_version: None,
+            channel,
+            log: error,
+        }),
+    }
 }
 
 pub async fn start_pi_process(
@@ -167,6 +259,7 @@ pub async fn start_pi_process(
     let static_dir = normalize_child_path(resolve_static_dir(&app));
     let extension_dir = resolve_extension_dir(&app);
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
+    let models_refresh_extension = resolve_models_refresh_extension(&app);
 
     let mut command = Command::new(&pi_command.program);
     configure_hidden_process(&mut command);
@@ -185,6 +278,10 @@ pub async fn start_pi_process(
         .env("TAU_STATIC_DIR", static_dir)
         .env("TAU_DESKTOP", "1")
         .stdin(Stdio::piped());
+
+    if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
 
     if let Some((stdout, stderr)) = pi_log_files(port) {
         command.stdout(stdout).stderr(stderr);
@@ -271,11 +368,16 @@ async fn start_pi_rpc_process(
 ) -> Result<PiInstance, String> {
     let pi_command = resolve_pi_command(&app)?;
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
+    let models_refresh_extension = resolve_models_refresh_extension(&app);
     crate::settings::append_desktop_log(format!(
-        "starting Pi RPC command={} cwd={} session_dir={}",
+        "starting Pi RPC command={} cwd={} session_dir={} models_refresh={}",
         pi_command.display,
         project_path.display(),
-        session_dir.display()
+        session_dir.display(),
+        models_refresh_extension
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".into())
     ));
 
     let mut command = Command::new(&pi_command.program);
@@ -292,6 +394,10 @@ async fn start_pi_rpc_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
 
     let (stdout_log, stderr_log) = pi_rpc_log_files();
 
@@ -767,6 +873,22 @@ fn resolve_extension_file(app: &AppHandle) -> PathBuf {
         })
 }
 
+fn resolve_models_refresh_extension(app: &AppHandle) -> Option<PathBuf> {
+    let candidates = [
+        resolve_extension_dir(app).map(|dir| dir.join("models-refresh.ts")),
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("extensions")
+                .join("models-refresh.ts"),
+        ),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
+        .map(normalize_child_path)
+}
+
 fn extension_node_path(extension_dir: &Path) -> Option<std::ffi::OsString> {
     let node_modules = extension_dir.join("node_modules");
     if !node_modules.exists() {
@@ -1005,4 +1127,291 @@ fn allocate_port(start: u16) -> u16 {
         }
     }
     start
+}
+
+async fn fetch_latest_pi_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+
+    if let Ok(response) = client
+        .get("https://pi.dev/api/latest-version")
+        .send()
+        .await
+    {
+        if let Ok(value) = response.json::<serde_json::Value>().await {
+            let version = value
+                .get("version")
+                .or_else(|| value.get("latest"))
+                .or_else(|| value.get("latestVersion"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                });
+            if let Some(version) = version.and_then(|text| extract_semver(&text)) {
+                return Some(version);
+            }
+        }
+    }
+
+    let npm = PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    let output = hidden_command(&npm)
+        .args(["view", "@earendil-works/pi-coding-agent", "version"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    extract_semver(text.trim())
+}
+
+async fn update_system_pi() -> Result<String, String> {
+    let npm = PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    let output = hidden_command(&npm)
+        .args(["install", "-g", "@earendil-works/pi-coding-agent@latest"])
+        .output()
+        .map_err(|err| format!("Failed to run npm install -g: {err}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let log = [stdout, stderr]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !output.status.success() {
+        return Err(if log.is_empty() {
+            "npm install -g failed".into()
+        } else {
+            log
+        });
+    }
+    Ok(if log.is_empty() {
+        "npm install -g @earendil-works/pi-coding-agent@latest completed".into()
+    } else {
+        log
+    })
+}
+
+async fn update_bundled_pi(app: &AppHandle) -> Result<String, String> {
+    let platform_dir = bundled_platform_dir(app)
+        .ok_or_else(|| "未找到可写的内置 Pi 目录，无法更新。".to_string())?;
+    if !is_dir_writable(&platform_dir) {
+        return Err(format!(
+            "内置 Pi 目录不可写：{}。请以可写位置运行开发版，或重新安装应用。",
+            platform_dir.display()
+        ));
+    }
+
+    let temp_root = env::temp_dir().join(format!(
+        "pi-studio-update-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0)
+    ));
+    create_dir_all(&temp_root).map_err(|err| format!("Failed to create temp dir: {err}"))?;
+
+    let npm = PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" });
+    let install = hidden_command(&npm)
+        .current_dir(&temp_root)
+        .args([
+            "install",
+            "--omit=dev",
+            "--no-save",
+            "--prefix",
+            temp_root.to_str().ok_or("Invalid temp path")?,
+            "@earendil-works/pi-coding-agent@latest",
+        ])
+        .output()
+        .map_err(|err| format!("Failed to download latest Pi package: {err}"))?;
+    let install_log = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&install.stdout),
+        String::from_utf8_lossy(&install.stderr)
+    );
+    if !install.status.success() {
+        let _ = fs::remove_dir_all(&temp_root);
+        return Err(format!("下载最新 Pi 失败：{}", install_log.trim()));
+    }
+
+    let package_src = temp_root
+        .join("node_modules")
+        .join("@earendil-works")
+        .join("pi-coding-agent");
+    if !package_src.join("dist").join("cli.js").exists() {
+        let _ = fs::remove_dir_all(&temp_root);
+        return Err("下载的 Pi 包缺少 dist/cli.js".into());
+    }
+
+    let target_package = platform_dir.join("pi-package");
+    let backup = platform_dir.join("pi-package.bak");
+    if backup.exists() {
+        let _ = fs::remove_dir_all(&backup);
+    }
+    if target_package.exists() {
+        fs::rename(&target_package, &backup)
+            .map_err(|err| format!("Failed to backup existing pi-package: {err}"))?;
+    }
+
+    if let Err(err) = copy_dir_recursive(&package_src, &target_package) {
+        // Attempt restore.
+        let _ = fs::remove_dir_all(&target_package);
+        if backup.exists() {
+            let _ = fs::rename(&backup, &target_package);
+        }
+        let _ = fs::remove_dir_all(&temp_root);
+        return Err(format!("替换内置 pi-package 失败：{err}"));
+    }
+
+    let _ = fs::remove_dir_all(&backup);
+    let _ = fs::remove_dir_all(&temp_root);
+
+    let version = fs::read_to_string(target_package.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".into());
+
+    Ok(format!(
+        "Bundled Pi updated to {version} at {}\n{}",
+        target_package.display(),
+        install_log.trim()
+    ))
+}
+
+fn bundled_platform_dir(app: &AppHandle) -> Option<PathBuf> {
+    let platform = platform_binaries_dir().ok()?;
+    for root in candidate_binaries_roots(app) {
+        let dir = root.join(platform);
+        if bundled_pi_command(&dir).is_some() {
+            return Some(dir);
+        }
+    }
+    // Prefer the cargo binaries dir for first-time installs in dev.
+    let fallback = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(platform);
+    if fallback.exists() {
+        Some(fallback)
+    } else {
+        None
+    }
+}
+
+fn is_dir_writable(path: &Path) -> bool {
+    let probe = path.join(".pi-studio-write-probe");
+    match File::create(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    create_dir_all(dst).map_err(|err| err.to_string())?;
+    for entry in fs::read_dir(src).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let file_type = entry.file_type().map_err(|err| err.to_string())?;
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = target.parent() {
+                create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            fs::copy(entry.path(), &target).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_semver(text: &str) -> Option<String> {
+    let re = regex_lite_semver(text)?;
+    Some(re)
+}
+
+/// Minimal semver extractor without extra crate dependency.
+fn regex_lite_semver(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            let mut dots = 0;
+            let mut end = index;
+            while end < bytes.len() {
+                let ch = bytes[end];
+                if ch.is_ascii_digit() {
+                    end += 1;
+                    continue;
+                }
+                if ch == b'.' {
+                    dots += 1;
+                    end += 1;
+                    continue;
+                }
+                break;
+            }
+            if dots >= 2 {
+                let candidate = &text[start..end];
+                if candidate.split('.').count() >= 3 {
+                    return Some(candidate.trim_end_matches('.').to_string());
+                }
+            }
+            index = end.max(index + 1);
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn parse_version_parts(version: &str) -> Option<Vec<u64>> {
+    let cleaned = version.trim().trim_start_matches('v');
+    let parts = cleaned
+        .split(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .next()
+        .unwrap_or(cleaned)
+        .split('.')
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts)
+    }
+}
+
+fn is_version_newer(latest: &str, current: &str) -> bool {
+    let Some(latest_parts) = parse_version_parts(latest) else {
+        return false;
+    };
+    let Some(current_parts) = parse_version_parts(current) else {
+        return true;
+    };
+    let max_len = latest_parts.len().max(current_parts.len());
+    for index in 0..max_len {
+        let left = latest_parts.get(index).copied().unwrap_or(0);
+        let right = current_parts.get(index).copied().unwrap_or(0);
+        if left != right {
+            return left > right;
+        }
+    }
+    false
 }

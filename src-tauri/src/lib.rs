@@ -110,7 +110,12 @@ pub fn run() {
             commands::extensions::install_pi_extension,
             commands::extensions::list_pi_extensions,
             commands::files::list_files,
+            commands::models::get_models_config,
+            commands::models::save_models_config,
+            commands::models::open_models_config,
             commands::sidecar::get_pi_runtime_info,
+            commands::sidecar::check_pi_update,
+            commands::sidecar::update_pi_runtime,
             commands::sidecar::start_pi,
             commands::sidecar::stop_pi,
             commands::sidecar::list_instances,
@@ -123,6 +128,7 @@ pub fn run() {
             ws::client::ws_disconnect,
             ws::client::ws_send,
         ])
+
         .setup(|app| {
             tray::install(app.handle())?;
             tray::install_menu(app.handle())?;

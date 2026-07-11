@@ -7,18 +7,22 @@ import type {
   ExtensionUiRequest,
   ImageAttachment,
   ModelInfo,
+  ModelsConfig,
+  ModelsConfigResponse,
   PiExtensionInfo,
   PiExtensionsCatalog,
   PiInstance,
   PiMessage,
   PiRuntimeInfo,
   PiSession,
+  PiUpdateResult,
   RpcEvent,
   RpcResponse,
   RenderedMessage,
   SessionEntry,
   SessionProject,
   SessionSearchResult,
+  SlashCommand,
   TimelineItem,
   ToolExecution,
   TransportEnvelope,
@@ -36,6 +40,7 @@ import {
   totalInputTokens,
   uniqueId,
 } from '../lib/utils';
+import { mergeSlashCommands } from '../lib/slash-commands';
 import { appStore } from './store';
 import {
   assistantError,
@@ -136,7 +141,10 @@ export class PiStudioController {
   setView(view: WorkspaceView): void {
     appStore.update({ view });
     if (view === 'projects') void this.loadProjects();
-    if (view === 'settings') void this.loadSettings();
+    if (view === 'settings') {
+      void this.loadSettings();
+      void this.loadModelsConfig();
+    }
     if (view === 'extensions') void this.loadExtensions();
   }
 
@@ -341,6 +349,13 @@ export class PiStudioController {
   async sendMessage(message: string, images: ImageAttachment[] = []): Promise<void> {
     const text = message.trim();
     if (!text && images.length === 0) return;
+
+    // Handle Pi CLI-compatible slash commands locally when possible.
+    if (!images.length && text.startsWith('/')) {
+      const handled = await this.handleLocalSlashCommand(text);
+      if (handled) return;
+    }
+
     const prompt = text || '（请查看附图）';
     const command = {
       type: 'prompt',
@@ -457,10 +472,13 @@ export class PiStudioController {
         invoke<PiRuntimeInfo>('get_pi_runtime_info').catch((error) => ({ error: String(error) })),
       ]);
       appStore.update({ settings, autostartEnabled, runtimeInfo });
+      // Best-effort latest version check; don't block settings open.
+      void this.checkPiUpdate(true);
     } else {
       appStore.update({
         runtimeInfo: {
           source: 'web',
+          updateChannel: 'web',
           piVersion: '不可用',
           nodeVersion: '不可用',
           platform: navigator.platform || 'browser',
@@ -477,6 +495,247 @@ export class PiStudioController {
     } else {
       appStore.update({ authConfigured: false, authEnabled: false });
     }
+  }
+
+  async loadModelsConfig(options: { silent?: boolean } = {}): Promise<void> {
+    if (!isDesktop) {
+      appStore.update({
+        modelsConfig: { providers: {} },
+        modelsConfigPath: '',
+        modelsConfigError: '模型配置仅在桌面应用中可用。',
+        modelsConfigLoading: false,
+      });
+      return;
+    }
+    const silent = Boolean(options.silent) || Boolean(appStore.getSnapshot().modelsConfig);
+    // Keep the existing list visible during refresh to avoid layout flash.
+    if (!silent) appStore.update({ modelsConfigLoading: true, modelsConfigError: '' });
+    else appStore.update({ modelsConfigError: '' });
+    try {
+      const result = await invoke<ModelsConfigResponse>('get_models_config');
+      const nextConfig = result.config || { providers: {} };
+      const current = appStore.getSnapshot();
+      // Skip store write when nothing changed — prevents child draft resets / flicker.
+      const samePath = (current.modelsConfigPath || '') === (result.path || '');
+      const sameConfig =
+        JSON.stringify(current.modelsConfig || { providers: {} }) === JSON.stringify(nextConfig);
+      if (samePath && sameConfig) {
+        appStore.update({ modelsConfigLoading: false, modelsConfigError: '' });
+        return;
+      }
+      appStore.update({
+        modelsConfig: nextConfig,
+        modelsConfigPath: result.path || '',
+        modelsConfigLoading: false,
+        modelsConfigError: '',
+      });
+    } catch (error) {
+      appStore.update({
+        modelsConfigLoading: false,
+        modelsConfigError: `读取 models.json 失败：${String(error)}`,
+      });
+    }
+  }
+
+  async saveModelsConfig(config: ModelsConfig): Promise<boolean> {
+    if (!isDesktop) {
+      notify('桌面端功能', '保存模型配置仅在桌面应用中可用。', 'warning');
+      return false;
+    }
+    appStore.update({ modelsConfigSaving: true, modelsConfigError: '' });
+    try {
+      // Preserve existing apiKey when the editor leaves it blank.
+      const previous = appStore.getSnapshot().modelsConfig;
+      const merged: ModelsConfig = {
+        ...config,
+        providers: Object.fromEntries(
+          Object.entries(config.providers || {}).map(([name, provider]) => {
+            const prevKey = previous?.providers?.[name]?.apiKey;
+            const nextKey = provider.apiKey;
+            const apiKey =
+              nextKey == null || String(nextKey).trim() === ''
+                ? prevKey
+                : nextKey;
+            return [name, { ...provider, ...(apiKey != null && apiKey !== '' ? { apiKey } : {}) }];
+          }),
+        ),
+      };
+      const result = await invoke<ModelsConfigResponse>('save_models_config', {
+        request: { config: merged },
+      });
+      appStore.update({
+        modelsConfig: result.config,
+        modelsConfigPath: result.path,
+        modelsConfigSaving: false,
+      });
+      notify('模型配置已保存', result.path, 'success');
+      // Force Pi to re-read models.json, then refresh the header picker.
+      await this.refreshPiModels();
+      return true;
+    } catch (error) {
+      appStore.update({
+        modelsConfigSaving: false,
+        modelsConfigError: `保存失败：${String(error)}`,
+      });
+      notify('保存模型配置失败', String(error), 'error');
+      return false;
+    }
+  }
+
+  /**
+   * Ask the running Pi session to re-load ~/.pi/agent/models.json, then refresh UI models.
+   * Falls back to restarting the current workspace if the refresh extension is not loaded.
+   */
+  async refreshPiModels(): Promise<void> {
+    const state = appStore.getSnapshot();
+    if (!state.hasActivePiSession || state.connection !== 'connected') {
+      await this.loadModels();
+      return;
+    }
+
+    // Prefer the lightweight extension command when available (models-refresh.ts).
+    // Older Pi sessions started before this extension was added won't have it.
+    let hasRefreshCommand = false;
+    try {
+      const commands = await this.rpcCommand<{ commands?: SlashCommand[] }>(
+        { type: 'get_commands' },
+        '',
+        true,
+      );
+      hasRefreshCommand = Boolean(
+        commands.success &&
+          commands.data?.commands?.some(
+            (command) => command.name === 'refresh-models' || command.name === '/refresh-models',
+          ),
+      );
+    } catch {
+      hasRefreshCommand = false;
+    }
+
+    if (hasRefreshCommand) {
+      const refresh = await this.rpcCommand(
+        { type: 'prompt', message: '/refresh-models' },
+        '',
+        true,
+      );
+      if (refresh.success) {
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+        await this.loadModels();
+        // Also refresh slash commands so newly-added skill/prompt names can appear later.
+        void this.loadSlashCommands();
+        notify('模型列表已刷新', `当前可用 ${appStore.getSnapshot().models.length} 个模型`, 'success');
+        return;
+      }
+    }
+
+    // Fallback: restart Pi so it boots with the new models.json / refresh extension.
+    try {
+      const workspace = appStore.getSnapshot().workspace;
+      if (workspace.noFolder || !workspace.path) await this.launchNoFolder();
+      else await this.launchProject(workspace.path);
+      await this.loadModels();
+      notify('模型列表已刷新', '已重启 Pi 会话以加载新配置', 'success');
+    } catch (error) {
+      await this.loadModels();
+      notify(
+        '模型已写入，但会话未刷新',
+        `${String(error)}。请重新打开项目，或在输入框发送 /refresh-models。`,
+        'warning',
+      );
+    }
+  }
+
+  async openModelsConfig(): Promise<void> {
+    if (!isDesktop) {
+      notify('桌面端功能', '打开 models.json 仅在桌面应用中可用。', 'warning');
+      return;
+    }
+    try {
+      const path = await invoke<string>('open_models_config');
+      notify('已打开 models.json', path, 'info');
+    } catch (error) {
+      notify('打开失败', String(error), 'error');
+    }
+  }
+
+  async checkPiUpdate(quiet = false): Promise<void> {
+    if (!isDesktop) return;
+    try {
+      const info = await invoke<PiRuntimeInfo>('check_pi_update');
+      appStore.update({ runtimeInfo: info, piUpdateMessage: '' });
+      if (!quiet) {
+        if (info.updateAvailable) {
+          notify('发现新版本', `Pi ${info.latestVersion} 可用（当前 ${info.piVersion || '未知'}）`, 'info');
+        } else {
+          notify('已是最新', `当前 Pi ${info.piVersion || '未知'}`, 'success');
+        }
+      }
+    } catch (error) {
+      if (!quiet) notify('检查更新失败', String(error), 'error');
+    }
+  }
+
+  async updatePiRuntime(): Promise<void> {
+    if (!isDesktop || appStore.getSnapshot().piUpdating) return;
+    const info = appStore.getSnapshot().runtimeInfo;
+    if (info?.updateChannel === 'override') {
+      notify('无法更新', '当前使用 PI_DESKTOP_CLI 覆盖路径，请手动更新。', 'warning');
+      return;
+    }
+    if (!info?.canUpdateSystem && !info?.canUpdateBundled) {
+      notify('无法更新', '当前运行时通道不支持应用内更新。', 'warning');
+      return;
+    }
+
+    // Remember the workspace so we can relaunch Pi after the update stops it.
+    const previousWorkspace = appStore.getSnapshot().workspace;
+    appStore.update({ piUpdating: true, piUpdateMessage: '正在更新 Pi…' });
+    try {
+      const result = await invoke<PiUpdateResult>('update_pi_runtime');
+      // Clear stale instance identity immediately — the old PID is gone.
+      window.tauDesktop.setInstanceId(null);
+      window.tauDesktop.setInstancePort(null);
+      appStore.update({
+        piUpdating: false,
+        piUpdateMessage: result.message,
+        hasActivePiSession: false,
+        connection: 'idle',
+        liveInstances: [],
+        activeSessionFile: null,
+      });
+      if (result.ok) {
+        notify('Pi 更新完成', result.newVersion ? `新版本 ${result.newVersion}` : result.message, 'success');
+        await this.loadSettings();
+        // Automatically restart Pi so the workbench is usable again.
+        appStore.update({ piUpdateMessage: '正在重新启动 Pi…', connection: 'connecting' });
+        try {
+          await this.relaunchAfterUpdate(previousWorkspace);
+          appStore.update({ piUpdateMessage: result.message });
+          notify('Pi 已重新连接', '更新后的运行时已启动', 'success');
+        } catch (error) {
+          appStore.update({
+            connection: 'idle',
+            piUpdateMessage: `更新成功，但重新启动失败：${String(error)}。请从“项目”手动打开。`,
+            view: 'projects',
+          });
+          notify('请重新打开项目', String(error), 'warning');
+        }
+      } else {
+        notify('Pi 更新失败', result.message, 'error');
+      }
+    } catch (error) {
+      appStore.update({ piUpdating: false, piUpdateMessage: String(error) });
+      notify('Pi 更新失败', String(error), 'error');
+    }
+  }
+
+  /** Restart Pi for the previous workspace (or default no-folder) after an update. */
+  private async relaunchAfterUpdate(workspace: { path: string; noFolder: boolean }): Promise<void> {
+    if (workspace.noFolder || !workspace.path) {
+      await this.launchNoFolder();
+      return;
+    }
+    await this.launchProject(workspace.path);
   }
 
   async setAutoCompaction(enabled: boolean): Promise<void> {
@@ -585,7 +844,115 @@ export class PiStudioController {
     appStore.update({ connection: 'connected', hasActivePiSession: true });
     void this.refreshWorkspaceFromHealth();
     void this.loadModels();
+    void this.loadSlashCommands();
     this.refreshSessionsSoon(300);
+  }
+
+  /**
+   * Load extension/prompt/skill commands from Pi RPC and merge with built-ins.
+   * Falls back to built-ins alone if get_commands is unavailable.
+   */
+  async loadSlashCommands(): Promise<void> {
+    const fallback = mergeSlashCommands([]);
+    try {
+      const result = await this.rpcCommand<{ commands?: SlashCommand[] }>(
+        { type: 'get_commands' },
+        '',
+        true,
+      );
+      const remote = result.success ? result.data?.commands || [] : [];
+      appStore.update({ slashCommands: mergeSlashCommands(remote) });
+    } catch {
+      appStore.update({ slashCommands: fallback });
+    }
+  }
+
+  /**
+   * Locally handle a subset of Pi CLI slash commands that map cleanly to the workbench UI.
+   * Returns true when the command was fully handled (should not be sent as a prompt).
+   */
+  private async handleLocalSlashCommand(text: string): Promise<boolean> {
+    const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
+    if (!match) return false;
+    const name = match[1]?.toLowerCase() || '';
+    const args = (match[2] || '').trim();
+
+    switch (name) {
+      case 'new':
+        await this.newSession();
+        return true;
+      case 'compact':
+        await this.rpcCommand({ type: 'compact', ...(args ? { customInstructions: args } : {}) }, '正在压缩上下文…');
+        return true;
+      case 'export':
+        await this.exportHtml();
+        return true;
+      case 'session':
+        await this.showSessionStats();
+        return true;
+      case 'settings':
+        this.setView('settings');
+        return true;
+      case 'model': {
+        // Open model dropdown via a custom event the Header listens for.
+        window.dispatchEvent(
+          new CustomEvent('pi-studio:open-model-picker', { detail: { query: args } }),
+        );
+        return true;
+      }
+      case 'name': {
+        if (!args) {
+          notify('用法', '/name <会话名称>', 'info');
+          return true;
+        }
+        await this.rpcCommand({ type: 'set_session_name', name: args }, `会话已命名为 ${args}`);
+        appStore.update({ selectedSessionTitle: args });
+        return true;
+      }
+      case 'copy': {
+        await this.copyLastAssistantMessage();
+        return true;
+      }
+      case 'hotkeys': {
+        this.appendMessage(
+          'system',
+          [
+            '快捷键',
+            'Enter — 发送',
+            'Shift+Enter — 换行',
+            '⌘/Ctrl+K — 命令面板',
+            '⌘/Ctrl+N — 新建会话',
+            '⌘/Ctrl+B — 切换会话栏',
+            'Esc — 停止生成 / 关闭面板',
+            '/ — 斜杠命令自动补全',
+          ].join('\n'),
+        );
+        return true;
+      }
+      case 'quit':
+        notify('提示', '请使用窗口关闭按钮退出 pi-studio', 'info');
+        return true;
+      // Extension commands, skills and prompt templates are forwarded to Pi via prompt().
+      default:
+        return false;
+    }
+  }
+
+  private async copyLastAssistantMessage(): Promise<void> {
+    const timeline = appStore.getSnapshot().timeline;
+    for (let index = timeline.length - 1; index >= 0; index -= 1) {
+      const item = timeline[index];
+      if (item?.kind === 'message' && item.message.role === 'assistant' && item.message.content.trim()) {
+        try {
+          await navigator.clipboard.writeText(item.message.content);
+          notify('已复制', '上一条助手消息已复制到剪贴板', 'success');
+        } catch (error) {
+          notify('复制失败', String(error), 'error');
+        }
+        return;
+      }
+    }
+    notify('无可复制内容', '当前会话中没有助手消息', 'info');
   }
 
   private handleRpcEvent(event: RpcEvent): void {
@@ -897,7 +1264,7 @@ export class PiStudioController {
     await this.sendMessage(next.message, next.images || []);
   }
 
-  private async loadModels(): Promise<void> {
+  async loadModels(): Promise<void> {
     const [models, state] = await Promise.all([
       this.rpcCommand<ModelsResponse>({ type: 'get_available_models' }, '', true),
       this.rpcCommand<StateResponse>({ type: 'get_state' }, '', true),
@@ -934,11 +1301,19 @@ export class PiStudioController {
     session: PiSession,
     project: SessionProject | null,
   ): Promise<void> {
+    if (!isDesktop) return;
     const state = appStore.getSnapshot();
-    if (!isDesktop || !state.hasActivePiSession) return;
     const noFolder = Boolean(session.noFolder || project?.noFolder);
     const path = session.cwd || project?.path || '';
     if (!noFolder && !path) return;
+
+    // If Pi was stopped (e.g. after an update), launch it for this workspace.
+    if (!state.hasActivePiSession || state.connection === 'idle' || state.connection === 'disconnected') {
+      if (noFolder) await this.launchNoFolder();
+      else await this.launchProject(path);
+      return;
+    }
+
     if (state.workspace.noFolder === noFolder && (noFolder || samePath(state.workspace.path, path))) return;
     const result = await postJson<LaunchResponse>(
       '/api/projects/launch',
@@ -1100,14 +1475,25 @@ export class PiStudioController {
             this.transport.forceReconnect();
             this.refreshSessionsSoon(300);
           } else if (payload?.status === 'error') {
+            window.tauDesktop.setInstanceId(null);
+            window.tauDesktop.setInstancePort(null);
             appStore.update({
               hasActivePiSession: false,
               connection: 'idle',
               view: 'projects',
               projectError: payload.error || 'Pi 自动启动失败',
+              liveInstances: [],
             });
           } else if (payload?.status === 'exited') {
-            appStore.update({ hasActivePiSession: false, connection: 'disconnected', view: 'projects' });
+            window.tauDesktop.setInstanceId(null);
+            window.tauDesktop.setInstancePort(null);
+            appStore.update({
+              hasActivePiSession: false,
+              connection: 'disconnected',
+              view: 'projects',
+              liveInstances: [],
+              activeSessionFile: null,
+            });
             this.addError('Pi 进程已退出，请打开“项目”重新启动。');
           }
         },

@@ -1,9 +1,56 @@
-import { useMemo, useState } from 'react';
-import type { AppSnapshot, PiExtensionInfo, ProjectInfo, ThemeId } from '../lib/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  AppSnapshot,
+  ModelsConfig,
+  ModelsProviderConfig,
+  ModelsProviderModel,
+  PiExtensionInfo,
+  ProjectInfo,
+  ThemeId,
+} from '../lib/types';
 import { basename, formatRelativeTime } from '../lib/utils';
 import { applyTheme, getCurrentTheme, themes } from '../lib/theme';
 import { controller } from '../app/controller';
 import { Icon } from './Icon';
+
+const API_OPTIONS = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+  'google-generative-ai',
+] as const;
+
+function emptyProvider(): ModelsProviderConfig {
+  return {
+    baseUrl: '',
+    api: 'openai-completions',
+    apiKey: '',
+    models: [],
+    compat: {
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+    },
+  };
+}
+
+function cloneConfig(config: ModelsConfig | null | undefined): ModelsConfig {
+  return JSON.parse(JSON.stringify(config || { providers: {} })) as ModelsConfig;
+}
+
+function configSignature(config: ModelsConfig | null | undefined): string {
+  try {
+    return JSON.stringify(config || { providers: {} });
+  } catch {
+    return '';
+  }
+}
+
+function maskApiKey(value?: string): string {
+  if (!value) return '未配置';
+  if (value.startsWith('!') || value.startsWith('$')) return value;
+  if (value.length <= 8) return '••••••••';
+  return `${value.slice(0, 3)}••••${value.slice(-4)}`;
+}
 
 export function ProjectsView({ snapshot }: { snapshot: AppSnapshot }) {
   const [query, setQuery] = useState('');
@@ -97,48 +144,459 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
   const [theme, setTheme] = useState<ThemeId>(() => getCurrentTheme());
   const thinkingLabels: Record<string, string> = { off: '关闭', minimal: '极简', low: '较低', medium: '中等', high: '较高', xhigh: '最高', max: '最高' };
   const info = snapshot.runtimeInfo;
+  const canUpdate = Boolean(info?.canUpdateSystem || info?.canUpdateBundled);
   return (
     <section className="settings-panel workspace-view">
       <div className="settings-header">
-        <div><span className="eyebrow">偏好设置</span><h3>设置</h3><p className="settings-subtitle">管理外观、Pi 运行时和桌面行为</p></div>
-        <button className="settings-close" type="button" aria-label="关闭设置" onClick={() => controller.returnToChat()}><Icon name="close" /></button>
+        <div className="settings-header-copy">
+          <span className="eyebrow">偏好设置</span>
+          <div className="settings-title-row">
+            <h3>设置</h3>
+            <button className="settings-close" type="button" aria-label="关闭设置" onClick={() => controller.returnToChat()}>
+              <Icon name="close" width={16} height={16} />
+            </button>
+          </div>
+          <p className="settings-subtitle">外观、模型提供商、Pi 运行时与桌面行为</p>
+        </div>
       </div>
+
       <div className="settings-body">
-        <div className="settings-section">
-          <div className="settings-section-title">外观</div>
-          <div className="theme-grid">
-            {(Object.entries(themes) as Array<[ThemeId, (typeof themes)[ThemeId]]>).map(([id, value]) => (
-              <button className={`theme-swatch${theme === id ? ' active' : ''}`} data-label={value.name} aria-label={`切换为${value.name}主题`} type="button" key={id} onClick={() => { setTheme(applyTheme(id)); }}>
-                <span className="swatch-colors">{value.colors.map((color) => <span className="swatch-dot" style={{ background: color }} key={color} />)}</span>
-              </button>
-            ))}
+        <div className="settings-group">
+          <div className="settings-group-label">常规</div>
+          <div className="settings-grid settings-grid-3">
+            <div className="settings-section">
+              <div className="settings-section-title">外观</div>
+              <div className="theme-grid">
+                {(Object.entries(themes) as Array<[ThemeId, (typeof themes)[ThemeId]]>).map(([id, value]) => (
+                  <button
+                    className={`theme-swatch${theme === id ? ' active' : ''}`}
+                    data-label={value.name}
+                    aria-label={`切换为${value.name}主题`}
+                    type="button"
+                    key={id}
+                    onClick={() => { setTheme(applyTheme(id)); }}
+                  >
+                    <span className="swatch-colors">
+                      {value.colors.map((color) => <span className="swatch-dot" style={{ background: color }} key={color} />)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">智能体</div>
+              <div className="settings-row">
+                <span className="settings-label">自动压缩上下文</span>
+                <Toggle enabled={snapshot.autoCompactionEnabled} label="自动压缩上下文" onChange={(enabled) => void controller.setAutoCompaction(enabled)} />
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">思考级别</span>
+                <button className="settings-value-btn" type="button" disabled={!snapshot.thinkingSupported} onClick={() => void controller.cycleThinking()}>
+                  {snapshot.thinkingSupported ? thinkingLabels[snapshot.thinkingLevel] || snapshot.thinkingLevel : '不可用'}
+                </button>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">显示思考过程</span>
+                <Toggle enabled={snapshot.showThinking} label="显示思考过程" onChange={(enabled) => controller.setShowThinking(enabled)} />
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">桌面端</div>
+              <div className="settings-row">
+                <span className="settings-label">开机自动启动</span>
+                <Toggle enabled={snapshot.autostartEnabled} label="开机自动启动" disabled={!window.tauDesktop.isTauri} onChange={(enabled) => void controller.setAutostart(enabled)} />
+              </div>
+              <div className="settings-row">
+                <span className="settings-label">连接方式</span>
+                <button className="settings-value-btn" type="button" disabled>
+                  {!window.tauDesktop.isTauri ? 'Web 模式' : window.tauDesktop.transport === 'mirror' ? String(snapshot.settings?.tauPort || 3001) : '原生 RPC'}
+                </button>
+              </div>
+              {snapshot.authConfigured ? (
+                <div className="settings-row">
+                  <span className="settings-label">需要登录</span>
+                  <Toggle enabled={snapshot.authEnabled} label="需要登录" onChange={(enabled) => void controller.setAuth(enabled)} />
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-        <div className="settings-section">
-          <div className="settings-section-title">智能体</div>
-          <div className="settings-row"><span className="settings-label">自动压缩上下文</span><Toggle enabled={snapshot.autoCompactionEnabled} label="自动压缩上下文" onChange={(enabled) => void controller.setAutoCompaction(enabled)} /></div>
-          <div className="settings-row"><span className="settings-label">思考级别</span><button className="settings-value-btn" type="button" disabled={!snapshot.thinkingSupported} onClick={() => void controller.cycleThinking()}>{snapshot.thinkingSupported ? thinkingLabels[snapshot.thinkingLevel] || snapshot.thinkingLevel : '不可用'}</button></div>
-          <div className="settings-row"><span className="settings-label">显示思考过程</span><Toggle enabled={snapshot.showThinking} label="显示思考过程" onChange={(enabled) => controller.setShowThinking(enabled)} /></div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">模型</div>
+          <ModelsProvidersSection snapshot={snapshot} />
         </div>
-        <div className="settings-section">
-          <div className="settings-section-title">桌面端</div>
-          <div className="settings-row"><span className="settings-label">开机自动启动</span><Toggle enabled={snapshot.autostartEnabled} label="开机自动启动" disabled={!window.tauDesktop.isTauri} onChange={(enabled) => void controller.setAutostart(enabled)} /></div>
-          <div className="settings-row"><span className="settings-label">连接方式</span><button className="settings-value-btn" type="button" disabled>{!window.tauDesktop.isTauri ? 'Web 模式' : window.tauDesktop.transport === 'mirror' ? String(snapshot.settings?.tauPort || 3001) : '原生 RPC'}</button></div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">运行时</div>
+          <div className="settings-section settings-section-wide">
+            <div className="settings-section-title-row">
+              <div>
+                <div className="settings-section-title">Pi 运行时</div>
+                <p className="settings-help settings-help-inline">检测版本、更新系统安装或内置 sidecar</p>
+              </div>
+              <div className="settings-section-actions">
+                <button className="settings-action-btn" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating} onClick={() => void controller.checkPiUpdate()}>
+                  检查更新
+                </button>
+                <button className="settings-action-btn primary" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating || !canUpdate} onClick={() => void controller.updatePiRuntime()}>
+                  {snapshot.piUpdating ? '正在更新…' : '更新 Pi'}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-kv-grid">
+              <div className="settings-kv">
+                <span className="settings-kv-label">来源</span>
+                <span className={`settings-kv-value${info?.bundled || ['system', 'override'].includes(info?.source || '') ? ' ok' : ' warn'}`}>{runtimeSource(snapshot)}</span>
+              </div>
+              <div className="settings-kv">
+                <span className="settings-kv-label">当前版本</span>
+                <span className="settings-kv-value">{info?.piVersion || '不可用'}</span>
+              </div>
+              <div className="settings-kv">
+                <span className="settings-kv-label">最新版本</span>
+                <span className={`settings-kv-value${info?.updateAvailable ? ' warn' : info?.latestVersion ? ' ok' : ''}`}>
+                  {info?.latestVersion || '未检查'}
+                  {info?.updateAvailable ? ' · 可更新' : info?.latestVersion ? ' · 已是最新' : ''}
+                </span>
+              </div>
+              <div className="settings-kv">
+                <span className="settings-kv-label">Node</span>
+                <span className="settings-kv-value">{info?.nodeVersion || '不可用'}</span>
+              </div>
+              <div className="settings-kv">
+                <span className="settings-kv-label">平台</span>
+                <span className="settings-kv-value">{info?.platform || '未知'}</span>
+              </div>
+            </div>
+
+            {info?.command ? <div className="settings-runtime-path" title={info.command}>{info.command}</div> : null}
+            {info?.error ? <div className="settings-runtime-warning">{info.error}</div> : null}
+            {snapshot.piUpdateMessage ? <div className="settings-runtime-warning">{snapshot.piUpdateMessage}</div> : null}
+            <p className="settings-help">更新会停止当前 Pi 会话。系统安装走 npm 全局更新；内置版本会替换 binaries 中的 pi-package。</p>
+          </div>
         </div>
-        <div className="settings-section">
-          <div className="settings-section-title">Pi 运行时</div>
-          <div className="settings-row"><span className="settings-label">来源</span><span className={`settings-value${info?.bundled || ['system', 'override'].includes(info?.source || '') ? ' ok' : ' warn'}`}>{runtimeSource(snapshot)}</span></div>
-          <div className="settings-row"><span className="settings-label">Pi 版本</span><span className="settings-value">{info?.piVersion || '不可用'}</span></div>
-          <div className="settings-row"><span className="settings-label">Node 版本</span><span className="settings-value">{info?.nodeVersion || '不可用'}</span></div>
-          <div className="settings-row"><span className="settings-label">平台</span><span className="settings-value">{info?.platform || '未知'}</span></div>
-          <div className="settings-runtime-path" title={info?.command || ''}>{info?.command || ''}</div>
-          {info?.error ? <div className="settings-runtime-warning">{info.error}</div> : null}
-        </div>
-        {snapshot.authConfigured ? (
-          <div className="settings-section"><div className="settings-section-title">身份验证</div><div className="settings-row"><span className="settings-label">需要登录</span><Toggle enabled={snapshot.authEnabled} label="需要登录" onChange={(enabled) => void controller.setAuth(enabled)} /></div></div>
-        ) : null}
       </div>
     </section>
+  );
+}
+
+function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
+  const [draft, setDraft] = useState<ModelsConfig>(() => cloneConfig(snapshot.modelsConfig));
+  const [editing, setEditing] = useState<string | null>(null);
+  const [newProviderName, setNewProviderName] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const lastSynced = useRef(configSignature(snapshot.modelsConfig));
+  const desktop = Boolean(window.tauDesktop.isTauri);
+
+  useEffect(() => {
+    const nextSignature = configSignature(snapshot.modelsConfig);
+    // Only reset local draft when server content actually changed and the user
+    // is not mid-edit — avoids flash/collapse on silent refresh.
+    if (nextSignature === lastSynced.current) return;
+    if (dirty) return;
+    lastSynced.current = nextSignature;
+    setDraft(cloneConfig(snapshot.modelsConfig));
+  }, [snapshot.modelsConfig, dirty]);
+
+  const providers = useMemo(
+    () => Object.entries(draft.providers || {}).sort(([left], [right]) => left.localeCompare(right)),
+    [draft.providers],
+  );
+
+  if (!desktop) {
+    return (
+      <div className="settings-section settings-section-wide">
+        <div className="settings-section-title">模型提供商</div>
+        <p className="settings-help">模型配置（~/.pi/agent/models.json）仅在桌面应用中可管理。</p>
+      </div>
+    );
+  }
+
+  const updateProvider = (name: string, next: ModelsProviderConfig) => {
+    setDirty(true);
+    setDraft((current) => ({
+      ...current,
+      providers: {
+        ...(current.providers || {}),
+        [name]: next,
+      },
+    }));
+  };
+
+  const removeProvider = (name: string) => {
+    setDirty(true);
+    setDraft((current) => {
+      const providers = { ...(current.providers || {}) };
+      delete providers[name];
+      return { ...current, providers };
+    });
+    if (editing === name) setEditing(null);
+  };
+
+  const addProvider = () => {
+    const name = newProviderName.trim();
+    if (!name) return;
+    if (draft.providers?.[name]) {
+      setEditing(name);
+      setNewProviderName('');
+      return;
+    }
+    setDirty(true);
+    setDraft((current) => ({
+      ...current,
+      providers: {
+        ...(current.providers || {}),
+        [name]: emptyProvider(),
+      },
+    }));
+    setEditing(name);
+    setNewProviderName('');
+  };
+
+  const save = async () => {
+    const ok = await controller.saveModelsConfig(draft);
+    if (ok) {
+      setDirty(false);
+      lastSynced.current = configSignature(draft);
+    }
+  };
+
+  const refresh = async () => {
+    // Silent refresh keeps the list mounted; no "loading…" swap.
+    await controller.loadModelsConfig({ silent: true });
+  };
+
+  return (
+    <div className="settings-section settings-section-wide models-section">
+      <div className="settings-section-title-row">
+        <div>
+          <div className="settings-section-title">模型提供商</div>
+          <p className="settings-help settings-help-inline">
+            编辑 `~/.pi/agent/models.json`，保存后自动刷新可用模型
+            {dirty ? ' · 有未保存更改' : ''}
+          </p>
+        </div>
+        <div className="settings-section-actions">
+          <button
+            className="settings-action-btn"
+            type="button"
+            onClick={() => void refresh()}
+            disabled={snapshot.modelsConfigLoading || snapshot.modelsConfigSaving}
+          >
+            {snapshot.modelsConfigLoading ? '刷新中…' : '刷新'}
+          </button>
+          <button className="settings-action-btn" type="button" onClick={() => void controller.openModelsConfig()}>打开文件</button>
+          <button className="settings-action-btn primary" type="button" onClick={() => void save()} disabled={snapshot.modelsConfigSaving}>
+            {snapshot.modelsConfigSaving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+
+      {snapshot.modelsConfigPath ? (
+        <div className="settings-meta-chip" title={snapshot.modelsConfigPath}>
+          <span className="settings-meta-chip-label">配置文件</span>
+          <span className="settings-meta-chip-value">{snapshot.modelsConfigPath}</span>
+        </div>
+      ) : null}
+      {snapshot.modelsConfigError ? <div className="settings-runtime-warning">{snapshot.modelsConfigError}</div> : null}
+      {/* First-load only: never blank the list during silent refresh. */}
+      {snapshot.modelsConfigLoading && !snapshot.modelsConfig ? (
+        <div className="settings-help">正在加载模型配置…</div>
+      ) : null}
+
+      <div className="provider-toolbar">
+        <input
+          className="settings-text-input"
+          type="text"
+          placeholder="新 provider 名称，例如 ollama"
+          value={newProviderName}
+          onChange={(event) => setNewProviderName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              addProvider();
+            }
+          }}
+        />
+        <button className="settings-action-btn" type="button" onClick={addProvider}>添加 Provider</button>
+      </div>
+
+      <div className="provider-list">
+        {providers.length === 0 ? (
+          <div className="settings-empty-state">
+            <strong>还没有自定义 provider</strong>
+            <p>在上方输入名称添加，例如 ollama、openrouter。</p>
+          </div>
+        ) : null}
+        {providers.map(([name, provider]) => (
+          <ProviderCard
+            key={name}
+            name={name}
+            provider={provider}
+            expanded={editing === name}
+            onToggle={() => setEditing((current) => (current === name ? null : name))}
+            onChange={(next) => updateProvider(name, next)}
+            onRemove={() => removeProvider(name)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderCard({
+  name,
+  provider,
+  expanded,
+  onToggle,
+  onChange,
+  onRemove,
+}: {
+  name: string;
+  provider: ModelsProviderConfig;
+  expanded: boolean;
+  onToggle(): void;
+  onChange(next: ModelsProviderConfig): void;
+  onRemove(): void;
+}) {
+  const models = provider.models || [];
+  const updateModel = (index: number, patch: Partial<ModelsProviderModel>) => {
+    const nextModels = models.map((model, modelIndex) => (modelIndex === index ? { ...model, ...patch } : model));
+    onChange({ ...provider, models: nextModels });
+  };
+  const removeModel = (index: number) => {
+    onChange({ ...provider, models: models.filter((_, modelIndex) => modelIndex !== index) });
+  };
+  const addModel = () => {
+    onChange({
+      ...provider,
+      models: [...models, { id: '', name: '', reasoning: false, contextWindow: 128000 }],
+    });
+  };
+
+  return (
+    <article className={`provider-card${expanded ? ' expanded' : ''}`}>
+      <button className="provider-card-header" type="button" onClick={onToggle}>
+        <div className="provider-card-main">
+          <div className="provider-card-title-row">
+            <strong className="provider-card-name">{name}</strong>
+            <span className="provider-badge">{models.length} 模型</span>
+            <span className="provider-badge muted">{provider.api || 'api 未设'}</span>
+          </div>
+          <span className="provider-card-meta">
+            {provider.baseUrl || '未设置 baseUrl'} · Key {maskApiKey(provider.apiKey)}
+          </span>
+        </div>
+        <span className="provider-card-chevron">{expanded ? '收起' : '编辑'}</span>
+      </button>
+
+      {expanded ? (
+        <div className="provider-card-body">
+          <div className="provider-form-grid">
+            <label className="provider-field">
+              <span>Base URL</span>
+              <input className="settings-text-input" value={provider.baseUrl || ''} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
+            </label>
+            <label className="provider-field">
+              <span>API 类型</span>
+              <select className="settings-text-input" value={provider.api || 'openai-completions'} onChange={(event) => onChange({ ...provider, api: event.target.value })}>
+                {API_OPTIONS.map((api) => <option value={api} key={api}>{api}</option>)}
+              </select>
+            </label>
+            <label className="provider-field provider-field-wide">
+              <span>API Key</span>
+              <input
+                className="settings-text-input"
+                type="password"
+                value={provider.apiKey || ''}
+                onChange={(event) => onChange({ ...provider, apiKey: event.target.value })}
+                placeholder={provider.apiKey ? maskApiKey(provider.apiKey) : '可选，支持 $ENV 或 !command；留空保留原值'}
+                autoComplete="off"
+              />
+            </label>
+          </div>
+
+          <div className="provider-compat-row">
+            <label className="provider-check">
+              <input
+                type="checkbox"
+                checked={provider.compat?.supportsDeveloperRole === false}
+                onChange={(event) => onChange({
+                  ...provider,
+                  compat: {
+                    ...(provider.compat || {}),
+                    supportsDeveloperRole: event.target.checked ? false : true,
+                  },
+                })}
+              />
+              <span>禁用 developer 角色</span>
+            </label>
+            <label className="provider-check">
+              <input
+                type="checkbox"
+                checked={provider.compat?.supportsReasoningEffort === false}
+                onChange={(event) => onChange({
+                  ...provider,
+                  compat: {
+                    ...(provider.compat || {}),
+                    supportsReasoningEffort: event.target.checked ? false : true,
+                  },
+                })}
+              />
+              <span>禁用 reasoning_effort</span>
+            </label>
+          </div>
+
+          <div className="provider-models-header">
+            <div>
+              <strong>模型列表</strong>
+              <span className="provider-models-count">{models.length}</span>
+            </div>
+            <button className="settings-action-btn" type="button" onClick={addModel}>添加模型</button>
+          </div>
+
+          <div className="provider-models">
+            {models.length === 0 ? <div className="settings-help">还没有模型，点击“添加模型”。</div> : null}
+            {models.length > 0 ? (
+              <div className="provider-model-table-head">
+                <span>模型 ID</span>
+                <span>显示名</span>
+                <span>Context</span>
+                <span>推理</span>
+                <span />
+              </div>
+            ) : null}
+            {models.map((model, index) => (
+              <div className="provider-model-row" key={`${name}-model-${index}`}>
+                <input className="settings-text-input" value={model.id || ''} placeholder="model-id" onChange={(event) => updateModel(index, { id: event.target.value })} />
+                <input className="settings-text-input" value={model.name || ''} placeholder="可选" onChange={(event) => updateModel(index, { name: event.target.value })} />
+                <input
+                  className="settings-text-input"
+                  type="number"
+                  min={1}
+                  value={model.contextWindow ?? ''}
+                  placeholder="128000"
+                  onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : undefined })}
+                />
+                <label className="provider-check compact">
+                  <input type="checkbox" checked={Boolean(model.reasoning)} onChange={(event) => updateModel(index, { reasoning: event.target.checked })} />
+                  <span>开启</span>
+                </label>
+                <button className="settings-action-btn danger" type="button" onClick={() => removeModel(index)}>删除</button>
+              </div>
+            ))}
+          </div>
+
+          <div className="provider-card-footer">
+            <button className="settings-action-btn danger" type="button" onClick={onRemove}>删除 Provider</button>
+          </div>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -188,8 +646,16 @@ export function ExtensionsView({ snapshot }: { snapshot: AppSnapshot }) {
   return (
     <section className="extensions-panel workspace-view">
       <div className="settings-header extensions-header">
-        <div><span className="eyebrow">能力中心</span><h3>扩展</h3><p className="settings-subtitle">浏览并安装 Pi 全局扩展</p></div>
-        <button className="settings-close" type="button" aria-label="关闭扩展" onClick={() => controller.returnToChat()}><Icon name="close" /></button>
+        <div className="settings-header-copy">
+          <span className="eyebrow">能力中心</span>
+          <div className="settings-title-row">
+            <h3>扩展</h3>
+            <button className="settings-close" type="button" aria-label="关闭扩展" onClick={() => controller.returnToChat()}>
+              <Icon name="close" width={16} height={16} />
+            </button>
+          </div>
+          <p className="settings-subtitle">浏览并安装 Pi 全局扩展</p>
+        </div>
       </div>
       <div className="extensions-body">
         <div className="extensions-toolbar">

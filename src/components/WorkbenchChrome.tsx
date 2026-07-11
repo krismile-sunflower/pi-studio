@@ -15,9 +15,15 @@ import type {
   FileAttachment,
   ImageAttachment,
   ModelInfo,
+  SlashCommand,
   ToastMessage,
 } from '../lib/types';
 import { basename, formatTokens, shortModelName, totalInputTokens, uniqueId } from '../lib/utils';
+import {
+  applySlashCompletion,
+  fuzzyFilterCommands,
+  matchSlashCommand,
+} from '../lib/slash-commands';
 import { controller } from '../app/controller';
 import { Icon, type IconName } from './Icon';
 
@@ -52,6 +58,17 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  useEffect(() => {
+    const openPicker = (event: Event) => {
+      const detail = (event as CustomEvent<{ query?: string }>).detail;
+      setModelQuery(detail?.query || '');
+      setModelsOpen(true);
+      setMetricsOpen(false);
+    };
+    window.addEventListener('pi-studio:open-model-picker', openPicker);
+    return () => window.removeEventListener('pi-studio:open-model-picker', openPicker);
   }, []);
 
   const models = snapshot.models.filter((model) => {
@@ -195,10 +212,45 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [recording, setRecording] = useState(false);
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const slashListRef = useRef<HTMLDivElement>(null);
   const knownFiles = useRef(new Set<string>());
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  const slashCommands = snapshot.slashCommands;
+  const slashMatch = useMemo(() => matchSlashCommand(text, text.length), [text]);
+  const slashResults = useMemo(() => {
+    if (!slashMatch) return [] as SlashCommand[];
+    // Show the full filtered list (no hard cap) so every command remains discoverable.
+    return fuzzyFilterCommands(slashCommands, slashMatch.query);
+  }, [slashCommands, slashMatch]);
+
+  useEffect(() => {
+    if (slashMatch && slashResults.length) {
+      setSlashOpen(true);
+      setSlashIndex(0);
+    } else {
+      setSlashOpen(false);
+    }
+  }, [slashMatch, slashResults.length, slashMatch?.query]);
+
+  useEffect(() => {
+    if (!slashOpen) return;
+    const list = slashListRef.current;
+    if (!list) return;
+    const active = list.querySelector<HTMLElement>(`[data-slash-index="${slashIndex}"]`);
+    active?.scrollIntoView({ block: 'nearest' });
+  }, [slashIndex, slashOpen, slashResults.length]);
+
+  useEffect(() => {
+    // Keep the active index in range if the filtered list shrinks.
+    if (slashIndex >= slashResults.length) {
+      setSlashIndex(Math.max(0, slashResults.length - 1));
+    }
+  }, [slashIndex, slashResults.length]);
 
   useEffect(() => {
     const added = pendingFiles.filter((file) => !knownFiles.current.has(file.path));
@@ -256,13 +308,31 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
     }
   };
 
+  const applySlash = (command: SlashCommand) => {
+    const cursor = textareaRef.current?.selectionStart ?? text.length;
+    const next = applySlashCompletion(text, command.name, cursor);
+    setText(next.text);
+    setSlashOpen(false);
+    window.requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
+
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (slashOpen && slashResults[slashIndex]) {
+      applySlash(slashResults[slashIndex]);
+      return;
+    }
     if (!text.trim() && images.length === 0) return;
     const message = text;
     const attachments = images;
     setText('');
     setImages([]);
+    setSlashOpen(false);
     pendingFiles.forEach((file) => onRemoveFile(file.path));
     await controller.sendMessage(message, attachments);
   };
@@ -304,6 +374,13 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
     }
   };
 
+  const sourceLabel = (source?: string) => {
+    if (source === 'extension') return '扩展';
+    if (source === 'prompt') return '模板';
+    if (source === 'skill') return '技能';
+    return '内置';
+  };
+
   return (
     <div className="input-area">
       <div className="mobile-model-bar" />
@@ -320,15 +397,71 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
           </div>
         ) : null}
         <form id="chat-form" onSubmit={(event) => void submit(event)}>
+          {slashOpen && slashResults.length ? (
+            <div className="slash-menu" role="listbox" aria-label="斜杠命令">
+              <div className="slash-menu-header">命令 · {slashResults.length} 项</div>
+              <div className="slash-menu-items" ref={slashListRef}>
+                {slashResults.map((command, index) => (
+                  <button
+                    key={`${command.source || 'cmd'}:${command.name}`}
+                    data-slash-index={index}
+                    className={`slash-menu-item${index === slashIndex ? ' active' : ''}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === slashIndex}
+                    onMouseEnter={() => setSlashIndex(index)}
+                    onClick={() => applySlash(command)}
+                  >
+                    <span className="slash-menu-item-main">
+                      <span className="slash-menu-item-name">/{command.name}</span>
+                      {command.argumentHint ? <span className="slash-menu-item-hint">{command.argumentHint}</span> : null}
+                    </span>
+                    <span className="slash-menu-item-desc">{command.description}</span>
+                    <span className="slash-menu-item-source">{sourceLabel(command.source)}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="slash-menu-footer"><span>↑↓ 选择</span><span>Tab/Enter 补全</span><span>Esc 关闭</span></div>
+            </div>
+          ) : null}
           <div className="input-bubble">
             <textarea
               id="message-input"
               ref={textareaRef}
               value={text}
-              placeholder={snapshot.selectedSessionFile ? '在当前会话中向 Pi 发送消息…' : '向 Pi 发送消息…'}
+              placeholder={snapshot.selectedSessionFile ? '在当前会话中向 Pi 发送消息… 输入 / 查看命令' : '向 Pi 发送消息… 输入 / 查看命令'}
               rows={2}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
+                if (slashOpen && slashResults.length) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setSlashIndex((value) => Math.min(slashResults.length - 1, value + 1));
+                    return;
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSlashIndex((value) => Math.max(0, value - 1));
+                    return;
+                  }
+                  if (event.key === 'Tab') {
+                    event.preventDefault();
+                    const command = slashResults[slashIndex];
+                    if (command) applySlash(command);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setSlashOpen(false);
+                    return;
+                  }
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    const command = slashResults[slashIndex];
+                    if (command) applySlash(command);
+                    return;
+                  }
+                }
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   void submit();
@@ -359,7 +492,7 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
           </div>
         </form>
       </div>
-      <div className="composer-hint">Enter 发送 · Shift+Enter 换行 · 内容可能存在错误，请检查重要信息</div>
+      <div className="composer-hint">Enter 发送 · Shift+Enter 换行 · / 斜杠命令 · 内容可能存在错误，请检查重要信息</div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { AppSnapshot } from '../lib/types';
+import { BUILTIN_SLASH_COMMANDS } from '../lib/slash-commands';
 
 const initialSnapshot: AppSnapshot = {
   view: 'chat',
@@ -28,6 +29,14 @@ const initialSnapshot: AppSnapshot = {
   lastUsage: null,
   sessionTotalCost: 0,
   queue: [],
+  slashCommands: BUILTIN_SLASH_COMMANDS,
+  modelsConfig: null,
+  modelsConfigPath: '',
+  modelsConfigLoading: false,
+  modelsConfigSaving: false,
+  modelsConfigError: '',
+  piUpdating: false,
+  piUpdateMessage: '',
   extensions: null,
   extensionsLoading: false,
   extensionError: '',

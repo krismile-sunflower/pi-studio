@@ -232,7 +232,64 @@ export interface PiRuntimeInfo {
   platform?: string;
   command?: string;
   error?: string;
+  latestVersion?: string;
+  updateAvailable?: boolean;
+  canUpdateSystem?: boolean;
+  canUpdateBundled?: boolean;
+  updateChannel?: 'bundled' | 'system' | 'override' | 'web' | string;
 }
+
+export interface PiUpdateResult {
+  ok: boolean;
+  message: string;
+  previousVersion?: string;
+  newVersion?: string;
+  channel?: string;
+  log?: string;
+}
+
+export interface ModelsProviderModel {
+  id: string;
+  name?: string;
+  api?: string;
+  baseUrl?: string;
+  reasoning?: boolean;
+  input?: Array<'text' | 'image' | string>;
+  contextWindow?: number;
+  maxTokens?: number;
+  [key: string]: unknown;
+}
+
+export interface ModelsProviderCompat {
+  supportsDeveloperRole?: boolean;
+  supportsReasoningEffort?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ModelsProviderConfig {
+  name?: string;
+  baseUrl?: string;
+  api?: string;
+  apiKey?: string;
+  authHeader?: boolean;
+  headers?: Record<string, string>;
+  compat?: ModelsProviderCompat;
+  models?: ModelsProviderModel[];
+  modelOverrides?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ModelsConfig {
+  providers: Record<string, ModelsProviderConfig>;
+  [key: string]: unknown;
+}
+
+export interface ModelsConfigResponse {
+  path: string;
+  exists: boolean;
+  config: ModelsConfig;
+}
+
 
 export interface ToastMessage {
   id: string;
@@ -289,6 +346,15 @@ export interface RpcEvent {
   [key: string]: unknown;
 }
 
+/** Slash command shown in composer autocomplete (mirrors Pi CLI `/` menu). */
+export interface SlashCommand {
+  name: string;
+  description: string;
+  /** builtin | extension | prompt | skill */
+  source?: 'builtin' | 'extension' | 'prompt' | 'skill' | string;
+  argumentHint?: string;
+}
+
 export interface AppSnapshot {
   view: WorkspaceView;
   connection: ConnectionStatus;
@@ -316,6 +382,14 @@ export interface AppSnapshot {
   lastUsage: Usage | null;
   sessionTotalCost: number;
   queue: Array<{ id: string; message: string; images?: ImageAttachment[] }>;
+  slashCommands: SlashCommand[];
+  modelsConfig: ModelsConfig | null;
+  modelsConfigPath: string;
+  modelsConfigLoading: boolean;
+  modelsConfigSaving: boolean;
+  modelsConfigError: string;
+  piUpdating: boolean;
+  piUpdateMessage: string;
   extensions: PiExtensionsCatalog | null;
   extensionsLoading: boolean;
   extensionError: string;
