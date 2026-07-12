@@ -1159,6 +1159,38 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   min-height: 0;
   flex-direction: column;
 }
+.chat-messages-wrap.is-switching .messages {
+  opacity: .72;
+  transition: opacity var(--duration-fast);
+}
+.session-switch-bar {
+  position: absolute;
+  z-index: 40;
+  top: calc(var(--header-height) + 10px);
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border: 1px solid var(--border-hover);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-md);
+  font-size: 11px;
+  font-weight: 620;
+  pointer-events: none;
+  animation: toastEnter var(--duration) var(--ease);
+}
+.session-switch-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: workbenchSpin .8s linear infinite;
+}
 .messages {
   position: relative;
   display: flex;

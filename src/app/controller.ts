@@ -83,6 +83,8 @@ export class PiStudioController {
   private sessionRefreshTimer: number | null = null;
   private pollTimer: number | null = null;
   private unlisten: UnlistenFn[] = [];
+  /** Monotonic token so only the latest session switch may mutate the timeline. */
+  private sessionSwitchGeneration = 0;
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -288,16 +290,27 @@ export class PiStudioController {
   async selectSession(session: PiSession | null, project: SessionProject | null): Promise<void> {
     this.setView('chat');
     if (!session) {
-      appStore.update({ selectedSessionFile: null, selectedSessionTitle: '' });
+      this.sessionSwitchGeneration += 1;
+      appStore.update({
+        selectedSessionFile: null,
+        selectedSessionTitle: '',
+        sessionSwitching: false,
+      });
       this.resetConversationWithWelcome();
       return;
     }
 
     // Skip no-op reselect to avoid timeline flash.
-    if (session.filePath && session.filePath === appStore.getSnapshot().selectedSessionFile) {
+    if (
+      session.filePath &&
+      session.filePath === appStore.getSnapshot().selectedSessionFile &&
+      !appStore.getSnapshot().sessionSwitching
+    ) {
       return;
     }
 
+    const generation = ++this.sessionSwitchGeneration;
+    // Keep the previous timeline visible until the next history is ready.
     appStore.update({
       selectedSessionFile: session.filePath,
       selectedSessionTitle: session.name || session.firstMessage || session.file || '当前会话',
@@ -305,13 +318,21 @@ export class PiStudioController {
       lastUsage: null,
       isStreaming: false,
       queue: [],
+      sessionSwitching: true,
     });
     this.selectedSessionLiveOnly = Boolean(session.live && session.fileExists === false);
+    this.currentStreamingId = null;
+    this.currentStreamingText = '';
+    this.currentStreamingThinking = '';
+    this.pendingPrompts = [];
 
     try {
       await this.ensureWorkspaceForSession(session, project);
-      await this.switchSession(session, project);
+      if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
+      await this.switchSession(session, project, generation);
     } catch (error) {
+      if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
+      appStore.update({ sessionSwitching: false });
       this.addError(`切换会话失败：${String(error)}`);
     }
   }
@@ -319,11 +340,15 @@ export class PiStudioController {
   async newSession(): Promise<void> {
     const state = appStore.getSnapshot();
     if (this.isMirrorMode || state.hasActivePiSession) {
+      const generation = ++this.sessionSwitchGeneration;
+      appStore.update({ sessionSwitching: true });
       const result = await this.rpcCommand<{ sessionFile?: string; entries?: SessionEntry[]; cancelled?: boolean }>(
         { type: 'new_session' },
         '正在创建新会话…',
       );
+      if (!this.isCurrentSessionSwitch(generation)) return;
       if (!result.success || result.data?.cancelled) {
+        appStore.update({ sessionSwitching: false });
         throw new Error(result.error || 'Pi 未能创建新会话');
       }
       const sessionFile = result.data?.sessionFile || null;
@@ -333,16 +358,16 @@ export class PiStudioController {
         selectedSessionTitle: '新会话',
         sessionTotalCost: 0,
         lastUsage: null,
-        timeline: [],
         view: 'chat',
+        sessionSwitching: false,
       });
       this.selectedSessionLiveOnly = false;
-      this.renderHistory(result.data?.entries || []);
-      if ((result.data?.entries || []).length === 0) this.addWelcome();
+      this.applyHistory(result.data?.entries || [], { allowEmptyWelcome: true });
       this.transport.send({ type: 'mirror_sync_request' });
       this.refreshSessionsSoon(300);
       return;
     }
+    this.sessionSwitchGeneration += 1;
     this.resetConversationWithWelcome();
   }
 
@@ -1131,6 +1156,16 @@ export class PiStudioController {
     this.isMirrorMode = true;
     const activeFile = snapshot.sessionFile || null;
     const state = appStore.getSnapshot();
+    // During an intentional session switch, ignore stale mirror snapshots for other sessions.
+    if (
+      state.sessionSwitching &&
+      state.selectedSessionFile &&
+      activeFile &&
+      state.selectedSessionFile !== activeFile
+    ) {
+      return;
+    }
+
     const selectedFile = state.selectedSessionFile || activeFile;
     appStore.update({ activeSessionFile: activeFile, selectedSessionFile: selectedFile });
 
@@ -1164,24 +1199,56 @@ export class PiStudioController {
         (current.length === 0 ||
           (current[current.length - 1]?.id === next.timeline[next.timeline.length - 1]?.id &&
             current[0]?.id === next.timeline[0]?.id));
-      if (!sameTail) appStore.update(next);
+      if (!sameTail) {
+        appStore.update({ ...next, sessionSwitching: false });
+      } else if (state.sessionSwitching) {
+        appStore.update({ sessionSwitching: false });
+      }
     } else if (!hasPending && !state.isStreaming && state.timeline.length === 0) {
       this.addWelcome();
+      if (state.sessionSwitching) appStore.update({ sessionSwitching: false });
+    } else if (state.sessionSwitching && !hasPending) {
+      // Live session with no entries yet — clear the switching spinner.
+      appStore.update({ sessionSwitching: false });
     }
     this.refreshSessionsSoon(300);
   }
 
-  private renderHistory(entries: SessionEntry[]): void {
-    appStore.update(buildHistoryTimeline(entries));
+  private applyHistory(
+    entries: SessionEntry[],
+    options: { allowEmptyWelcome?: boolean } = {},
+  ): void {
+    const next = buildHistoryTimeline(entries);
+    if (next.timeline.length === 0 && options.allowEmptyWelcome) {
+      appStore.update({
+        timeline: [],
+        sessionTotalCost: 0,
+        lastUsage: null,
+        sessionSwitching: false,
+      });
+      this.addWelcome();
+      return;
+    }
+    appStore.update({ ...next, sessionSwitching: false });
   }
 
-  private async switchSession(session: PiSession, project: SessionProject | null): Promise<void> {
+  private isCurrentSessionSwitch(generation: number, sessionFile?: string | null): boolean {
+    if (generation !== this.sessionSwitchGeneration) return false;
+    if (sessionFile == null) return true;
+    return appStore.getSnapshot().selectedSessionFile === sessionFile;
+  }
+
+  private async switchSession(
+    session: PiSession,
+    project: SessionProject | null,
+    generation: number,
+  ): Promise<void> {
     this.currentStreamingId = null;
     this.currentStreamingText = '';
     this.currentStreamingThinking = '';
     this.pendingPrompts = [];
 
-    // Prefer a single timeline replace. Avoid empty flash when possible.
+    // Prefer a single timeline replace. Keep the previous conversation visible until then.
     let loadedFromFile = false;
     const canLoad = !session.live || session.fileExists !== false;
     if (canLoad && project?.dirName && session.file) {
@@ -1189,20 +1256,25 @@ export class PiStudioController {
         const history = await apiJson<{ entries?: SessionEntry[] }>(
           `/api/sessions/${encodeURIComponent(project.dirName)}/${encodeURIComponent(session.file)}`,
         );
-        this.renderHistory(history.entries || []);
+        if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
+        this.applyHistory(history.entries || [], { allowEmptyWelcome: true });
         loadedFromFile = true;
       } catch (error) {
-        appStore.update({ timeline: [] });
-        this.addError(`会话加载失败：${String(error)}`);
+        if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
+        // Don't blank the pane on file load failure — wait for resume / show error.
+        this.addError(`会话预加载失败，正在尝试从 Pi 恢复：${String(error)}`);
       }
-    } else {
-      appStore.update({ timeline: [] });
-      this.addWelcome();
+    } else if (session.live && session.fileExists === false) {
+      // Live-only sessions have no file history yet — show welcome once mirror sync arrives.
+      if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
+      this.applyHistory([], { allowEmptyWelcome: true });
     }
+
+    if (!this.isCurrentSessionSwitch(generation, session.filePath)) return;
 
     const activeFile = appStore.getSnapshot().activeSessionFile;
     if (session.live && session.fileExists === false) {
-      appStore.update({ activeSessionFile: session.filePath });
+      appStore.update({ activeSessionFile: session.filePath, sessionSwitching: false });
       this.selectedSessionLiveOnly = true;
       this.transport.send({ type: 'mirror_sync_request' });
     } else if (session.filePath === activeFile) {
@@ -1210,15 +1282,22 @@ export class PiStudioController {
       if (!loadedFromFile || appStore.getSnapshot().timeline.length === 0) {
         this.transport.send({ type: 'mirror_sync_request' });
       }
+      appStore.update({ sessionSwitching: false });
     } else if (session.filePath) {
-      await this.resumeSession(session.filePath, { keepExistingHistory: loadedFromFile });
+      await this.resumeSession(session.filePath, {
+        keepExistingHistory: loadedFromFile,
+        generation,
+      });
+    } else {
+      appStore.update({ sessionSwitching: false });
     }
   }
 
   private async resumeSession(
     sessionFile: string,
-    options: { keepExistingHistory?: boolean } = {},
+    options: { keepExistingHistory?: boolean; generation?: number } = {},
   ): Promise<void> {
+    const generation = options.generation ?? this.sessionSwitchGeneration;
     // Quiet RPC — toast popups on every switch feel like UI jitter.
     const result = await this.rpcCommand<{
       sessionFile?: string;
@@ -1226,17 +1305,23 @@ export class PiStudioController {
       cancelled?: boolean;
       error?: string;
     }>({ type: 'switch_session', sessionFile }, '', true);
+    if (!this.isCurrentSessionSwitch(generation, sessionFile)) return;
     if (!result.success || result.data?.cancelled) {
+      appStore.update({ sessionSwitching: false });
       throw new Error(result.error || result.data?.error || 'Pi 未能恢复该会话');
     }
     const resumed = result.data?.sessionFile || sessionFile;
+    if (!this.isCurrentSessionSwitch(generation, sessionFile)) return;
     appStore.update({ selectedSessionFile: resumed, activeSessionFile: resumed });
     this.selectedSessionLiveOnly = false;
     if (result.data?.entries?.length) {
       // Replace only when resume provides authoritative history.
-      this.renderHistory(result.data.entries);
+      this.applyHistory(result.data.entries);
     } else if (!options.keepExistingHistory) {
       this.transport.send({ type: 'mirror_sync_request' });
+      appStore.update({ sessionSwitching: false });
+    } else {
+      appStore.update({ sessionSwitching: false });
     }
   }
 
@@ -1411,7 +1496,11 @@ export class PiStudioController {
 
   private resetConversationWithWelcome(): void {
     appStore.resetConversation();
-    appStore.update({ selectedSessionFile: null, selectedSessionTitle: '' });
+    appStore.update({
+      selectedSessionFile: null,
+      selectedSessionTitle: '',
+      sessionSwitching: false,
+    });
     this.appendWelcome();
   }
 

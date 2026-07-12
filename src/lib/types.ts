@@ -368,6 +368,8 @@ export interface AppSnapshot {
   sessionProjects: SessionProject[];
   sessionSearchResults: SessionSearchResult[];
   sessionsLoading: boolean;
+  /** True while a session switch is loading history / resuming Pi. */
+  sessionSwitching: boolean;
   projects: ProjectInfo[];
   projectsLoading: boolean;
   projectError: string;

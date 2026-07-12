@@ -275,7 +275,11 @@ export function App() {
           {snapshot.view === 'extensions' ? <ExtensionsView snapshot={snapshot} /> : null}
           {snapshot.view === 'chat' ? (
             <div className="chat-panel">
-              <MessageList timeline={snapshot.timeline} streaming={snapshot.isStreaming} />
+              <MessageList
+                timeline={snapshot.timeline}
+                streaming={snapshot.isStreaming}
+                switching={snapshot.sessionSwitching}
+              />
               <Composer
                 snapshot={snapshot}
                 pendingFiles={pendingFiles}

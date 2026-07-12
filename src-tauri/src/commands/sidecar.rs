@@ -154,6 +154,10 @@ pub async fn update_pi_runtime(
     for instance in &running {
         let _ = stop_pi_inner(state.inner(), Some(instance.pid));
     }
+    // Windows may keep file handles open briefly after kill/wait.
+    if !running.is_empty() {
+        sleep(Duration::from_millis(500)).await;
+    }
 
     let result = match channel.as_str() {
         "system" => update_system_pi().await,
@@ -1253,27 +1257,21 @@ async fn update_bundled_pi(app: &AppHandle) -> Result<String, String> {
     }
 
     let target_package = platform_dir.join("pi-package");
-    let backup = platform_dir.join("pi-package.bak");
-    if backup.exists() {
-        let _ = fs::remove_dir_all(&backup);
-    }
-    if target_package.exists() {
-        fs::rename(&target_package, &backup)
-            .map_err(|err| format!("Failed to backup existing pi-package: {err}"))?;
-    }
-
-    if let Err(err) = copy_dir_recursive(&package_src, &target_package) {
-        // Attempt restore.
-        let _ = fs::remove_dir_all(&target_package);
-        if backup.exists() {
-            let _ = fs::rename(&backup, &target_package);
-        }
+    if let Err(err) = replace_dir_atomically(&package_src, &target_package).await {
         let _ = fs::remove_dir_all(&temp_root);
-        return Err(format!("替换内置 pi-package 失败：{err}"));
+        return Err(err);
     }
-
-    let _ = fs::remove_dir_all(&backup);
     let _ = fs::remove_dir_all(&temp_root);
+
+    // Keep the cargo source binaries and the tauri dev copy in sync when both exist.
+    if let Some(sibling) = sibling_bundled_pi_package(&platform_dir, &target_package) {
+        if let Err(err) = replace_dir_atomically(&target_package, &sibling).await {
+            crate::settings::append_desktop_log(format!(
+                "synced primary pi-package but failed to update sibling {}: {err}",
+                sibling.display()
+            ));
+        }
+    }
 
     let version = fs::read_to_string(target_package.join("package.json"))
         .ok()
@@ -1291,6 +1289,156 @@ async fn update_bundled_pi(app: &AppHandle) -> Result<String, String> {
         target_package.display(),
         install_log.trim()
     ))
+}
+
+/// Replace `dst` with the contents of `src` using rename + retry so Windows file locks
+/// after stopping Pi do not immediately fail the update.
+async fn replace_dir_atomically(src: &Path, dst: &Path) -> Result<(), String> {
+    let parent = dst
+        .parent()
+        .ok_or_else(|| format!("Invalid package path: {}", dst.display()))?;
+    create_dir_all(parent).map_err(|err| format!("Failed to create parent dir: {err}"))?;
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let staging = parent.join(format!(
+        "{}.new-{}",
+        dst.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pi-package"),
+        stamp
+    ));
+    let backup = parent.join(format!(
+        "{}.bak-{}",
+        dst.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pi-package"),
+        stamp
+    ));
+
+    // Clean leftovers from interrupted previous updates.
+    let _ = remove_path_with_retry(&staging).await;
+    let _ = remove_path_with_retry(&backup).await;
+
+    if let Err(err) = copy_dir_recursive(src, &staging) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!("准备新 pi-package 失败：{err}"));
+    }
+
+    // Move current install out of the way (preferred), with retries for Windows locks.
+    let had_existing = dst.exists();
+    if had_existing {
+        if let Err(err) = rename_path_with_retry(dst, &backup).await {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(format!(
+                "备份现有 pi-package 失败：{err}。请完全退出 Pi / 关闭占用该目录的窗口后重试。"
+            ));
+        }
+    }
+
+    if let Err(err) = rename_path_with_retry(&staging, dst).await {
+        // Staging rename failed — try restore.
+        let _ = fs::remove_dir_all(dst);
+        let _ = fs::remove_dir_all(&staging);
+        if backup.exists() {
+            let _ = rename_path_with_retry(&backup, dst).await;
+        }
+        return Err(format!(
+            "替换内置 pi-package 失败：{err}。请完全退出 Pi / 关闭占用该目录的窗口后重试。"
+        ));
+    }
+
+    // Best-effort cleanup of the backup. Leaving it is fine if removal is locked.
+    if backup.exists() {
+        let _ = remove_path_with_retry(&backup).await;
+    }
+    Ok(())
+}
+
+async fn rename_path_with_retry(from: &Path, to: &Path) -> Result<(), String> {
+    const ATTEMPTS: u32 = 8;
+    let mut last_err = None;
+    for attempt in 0..ATTEMPTS {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = Some(err.to_string());
+                // Access denied / sharing violation — wait for handles to release.
+                if attempt + 1 < ATTEMPTS {
+                    sleep(Duration::from_millis(200 * u64::from(attempt + 1))).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "rename failed".into()))
+}
+
+async fn remove_path_with_retry(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    const ATTEMPTS: u32 = 6;
+    let mut last_err = None;
+    for attempt in 0..ATTEMPTS {
+        let result = if path.is_dir() {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_file(path)
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = Some(err.to_string());
+                if attempt + 1 < ATTEMPTS {
+                    sleep(Duration::from_millis(150 * u64::from(attempt + 1))).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "remove failed".into()))
+}
+
+/// When updating one of the two common bundled locations (source binaries vs tauri
+/// debug/resource copy), also refresh the other so dev restarts pick up the new Pi.
+fn sibling_bundled_pi_package(platform_dir: &Path, target_package: &Path) -> Option<PathBuf> {
+    let platform = platform_binaries_dir().ok()?;
+    let cargo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries").join(platform);
+    let cargo_package = cargo_root.join("pi-package");
+
+    let target_norm = normalize_child_path(target_package.to_path_buf());
+    let cargo_norm = normalize_child_path(cargo_package.clone());
+    if target_norm == cargo_norm {
+        // Primary was cargo source; look for a nearby target/debug copy used by tauri dev.
+        let debug_package = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("debug")
+            .join("binaries")
+            .join(platform)
+            .join("pi-package");
+        if debug_package.parent().is_some_and(|parent| parent.exists()) {
+            return Some(debug_package);
+        }
+        return None;
+    }
+
+    // Primary was somewhere else (resource/debug). Keep the cargo source tree updated too.
+    if cargo_root.exists() || cargo_package.exists() {
+        return Some(cargo_package);
+    }
+
+    // Fallback: same platform dir name under cargo binaries when primary was a different root.
+    let alt = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(platform_dir.file_name()?)
+        .join("pi-package");
+    let alt_norm = normalize_child_path(alt.clone());
+    if alt_norm != target_norm && (alt.exists() || alt.parent().is_some_and(|p| p.exists())) {
+        Some(alt)
+    } else {
+        None
+    }
 }
 
 fn bundled_platform_dir(app: &AppHandle) -> Option<PathBuf> {

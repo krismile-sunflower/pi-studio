@@ -223,7 +223,15 @@ function timelineFingerprint(timeline: TimelineItem[]): string {
   return `${timeline.length}:${timeline[0]?.id || ''}:${timeline[timeline.length - 1]?.id || ''}`;
 }
 
-export function MessageList({ timeline, streaming }: { timeline: TimelineItem[]; streaming: boolean }) {
+export function MessageList({
+  timeline,
+  streaming,
+  switching = false,
+}: {
+  timeline: TimelineItem[];
+  streaming: boolean;
+  switching?: boolean;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrolledUp, setScrolledUp] = useState(false);
   const [newMessage, setNewMessage] = useState(false);
@@ -260,7 +268,13 @@ export function MessageList({ timeline, streaming }: { timeline: TimelineItem[];
   }, [timeline]);
 
   return (
-    <div className="chat-messages-wrap">
+    <div className={`chat-messages-wrap${switching ? ' is-switching' : ''}`}>
+      {switching ? (
+        <div className="session-switch-bar" role="status" aria-live="polite">
+          <span className="session-switch-spinner" aria-hidden="true" />
+          <span>正在切换会话…</span>
+        </div>
+      ) : null}
       <div
         className="messages"
         id="messages"

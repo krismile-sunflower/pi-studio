@@ -15,6 +15,7 @@ const initialSnapshot: AppSnapshot = {
   sessionProjects: [],
   sessionSearchResults: [],
   sessionsLoading: false,
+  sessionSwitching: false,
   projects: [],
   projectsLoading: false,
   projectError: '',
