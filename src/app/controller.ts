@@ -5,6 +5,8 @@ import { initialTransportUrl, PiTransport } from '../lib/transport';
 import type {
   DesktopSettings,
   ExtensionUiRequest,
+  GitFileDiff,
+  GitStatus,
   ImageAttachment,
   ModelInfo,
   ModelsConfig,
@@ -148,6 +150,7 @@ export class PiStudioController {
       void this.loadModelsConfig();
     }
     if (view === 'extensions') void this.loadExtensions();
+    if (view === 'changes') void this.loadGitStatus();
   }
 
   returnToChat(): void {
@@ -782,6 +785,80 @@ export class PiStudioController {
       appStore.update({ autostartEnabled: value });
     } catch (error) {
       notify('开机启动设置失败', String(error), 'error');
+    }
+  }
+
+  async setPermissionMode(permissionMode: 'ask' | 'read-only' | 'full-access'): Promise<void> {
+    if (!isDesktop) return;
+    const current = appStore.getSnapshot().settings;
+    if (!current) return;
+    try {
+      const settings = await invoke<DesktopSettings>('save_desktop_settings', {
+        settings: { ...current, permissionMode },
+      });
+      appStore.update({ settings });
+      notify(
+        '权限已更新',
+        ({
+          ask: '写入文件和执行命令前会请求确认。',
+          'read-only': 'Pi 只能读取和搜索文件。',
+          'full-access': 'Pi 将直接执行工具操作。',
+        } as Record<string, string>)[permissionMode],
+        'success',
+      );
+    } catch (error) {
+      notify('权限设置失败', String(error), 'error');
+    }
+  }
+
+  async setProjectTrusted(path: string, trusted: boolean): Promise<void> {
+    if (!isDesktop || !path) return;
+    const current = appStore.getSnapshot().settings;
+    if (!current) return;
+    const paths = new Set(current.trustedProjectPaths || []);
+    if (trusted) paths.add(path);
+    else paths.delete(path);
+    try {
+      const settings = await invoke<DesktopSettings>('save_desktop_settings', {
+        settings: { ...current, trustedProjectPaths: [...paths] },
+      });
+      appStore.update({ settings });
+      notify(
+        trusted ? '项目已设为可信任' : '已撤销项目可信任',
+        trusted ? '下次启动该项目的 Pi 会话时会加载项目级 .pi 资源。' : '下次启动该项目的 Pi 会话时将忽略项目级 .pi 资源。',
+        trusted ? 'success' : 'info',
+      );
+    } catch (error) {
+      notify('项目可信任设置失败', String(error), 'error');
+    }
+  }
+
+  async loadGitStatus(): Promise<void> {
+    const root = appStore.getSnapshot().workspace.path;
+    if (!isDesktop || !root || appStore.getSnapshot().workspace.noFolder) {
+      appStore.update({ gitStatus: null, gitLoading: false, gitError: '请先打开一个本地项目。', selectedGitPath: null, gitDiff: null });
+      return;
+    }
+    appStore.update({ gitLoading: true, gitError: '' });
+    try {
+      const gitStatus = await invoke<GitStatus>('get_git_status', { path: root });
+      const selected = appStore.getSnapshot().selectedGitPath;
+      const stillExists = gitStatus.changes.some((change) => change.path === selected);
+      appStore.update({ gitStatus, gitLoading: false, selectedGitPath: stillExists ? selected : null, gitDiff: stillExists ? appStore.getSnapshot().gitDiff : null });
+    } catch (error) {
+      appStore.update({ gitStatus: null, gitLoading: false, gitError: String(error), selectedGitPath: null, gitDiff: null });
+    }
+  }
+
+  async selectGitChange(filePath: string): Promise<void> {
+    const root = appStore.getSnapshot().workspace.path;
+    if (!isDesktop || !root) return;
+    appStore.update({ selectedGitPath: filePath, gitDiff: null, gitDiffLoading: true });
+    try {
+      const gitDiff = await invoke<GitFileDiff>('get_git_file_diff', { path: root, filePath });
+      if (appStore.getSnapshot().selectedGitPath === filePath) appStore.update({ gitDiff, gitDiffLoading: false });
+    } catch (error) {
+      if (appStore.getSnapshot().selectedGitPath === filePath) appStore.update({ gitDiff: { path: filePath, diff: `无法加载 diff：${String(error)}` }, gitDiffLoading: false });
     }
   }
 

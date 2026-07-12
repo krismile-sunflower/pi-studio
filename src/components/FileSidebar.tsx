@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiJson, postJson } from '../lib/desktop';
-import type { FileAttachment } from '../lib/types';
+import type { AppSnapshot, FileAttachment } from '../lib/types';
 import { Icon } from './Icon';
+import { controller } from '../app/controller';
 
 interface FileItem {
   name: string;
@@ -31,6 +32,7 @@ interface FileContentResponse {
 interface FileSidebarProps {
   rootPath: string;
   open: boolean;
+  snapshot: AppSnapshot;
   onClose(): void;
   onInsert(file: FileAttachment): void;
 }
@@ -51,12 +53,21 @@ function fileIcon(item: FileItem): string {
   return labels[extension || ''] || '·';
 }
 
-export function FileSidebar({ rootPath, open, onClose, onInsert }: FileSidebarProps) {
+function gitChangeLabel(indexStatus: string, worktreeStatus: string): string {
+  const status = `${indexStatus}${worktreeStatus}`;
+  if (status.includes('A') || status === '??') return '新增';
+  if (status.includes('D')) return '删除';
+  if (status.includes('R')) return '重命名';
+  return '修改';
+}
+
+export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: FileSidebarProps) {
   const [itemsByPath, setItemsByPath] = useState<Record<string, FileItem[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<FileContentResponse | null>(null);
+  const [tab, setTab] = useState<'files' | 'changes'>('files');
 
   const load = async (path: string) => {
     if (!path) return;
@@ -78,6 +89,10 @@ export function FileSidebar({ rootPath, open, onClose, onInsert }: FileSidebarPr
     setPreview(null);
     if (open && rootPath) void load(rootPath);
   }, [open, rootPath]);
+
+  useEffect(() => {
+    if (open && tab === 'changes') void controller.loadGitStatus();
+  }, [open, rootPath, tab]);
 
   const rootItems = itemsByPath[rootPath] || [];
 
@@ -149,16 +164,38 @@ export function FileSidebar({ rootPath, open, onClose, onInsert }: FileSidebarPr
       <div className={`file-sidebar-overlay${open ? ' visible' : ''}`} onClick={onClose} />
       <aside className={`file-sidebar${open ? '' : ' collapsed'}`} aria-label="文件浏览器">
         <div className="file-sidebar-header">
-          <div><span className="eyebrow">工作区</span><strong className="file-sidebar-title">文件</strong></div>
+          <div>
+            <span className="eyebrow">工作区</span>
+            <div className="file-sidebar-tabs" role="tablist" aria-label="工作区视图">
+              <button className={tab === 'files' ? 'active' : ''} type="button" role="tab" aria-selected={tab === 'files'} onClick={() => setTab('files')}>文件</button>
+              <button className={tab === 'changes' ? 'active' : ''} type="button" role="tab" aria-selected={tab === 'changes'} onClick={() => setTab('changes')}>变更{snapshot.gitStatus?.changes.length ? ` ${snapshot.gitStatus.changes.length}` : ''}</button>
+            </div>
+          </div>
           <div className="file-sidebar-actions">
-            <button className="icon-btn" type="button" title="全部折叠" aria-label="全部折叠" onClick={() => setExpanded(new Set())}><Icon name="arrow-left" width={14} height={14} style={{ transform: 'rotate(90deg)' }} /></button>
+            {tab === 'files' ? <button className="icon-btn" type="button" title="全部折叠" aria-label="全部折叠" onClick={() => setExpanded(new Set())}><Icon name="arrow-left" width={14} height={14} style={{ transform: 'rotate(90deg)' }} /></button> : <button className="icon-btn" type="button" title="刷新 Git 变更" aria-label="刷新 Git 变更" onClick={() => void controller.loadGitStatus()}><Icon name="refresh" width={14} height={14} /></button>}
             <button className="icon-btn" type="button" title="在文件管理器中打开" aria-label="在文件管理器中打开" disabled={!rootPath} onClick={() => void postJson('/api/open', { filePath: rootPath })}><Icon name="folder" width={14} height={14} /></button>
             <button className="icon-btn" type="button" title="关闭文件栏" aria-label="关闭文件栏" onClick={onClose}><Icon name="close" width={14} height={14} /></button>
           </div>
         </div>
-        <div className="file-sidebar-path" title={rootPath}>{rootPath}</div>
+        <div className="file-sidebar-path" title={rootPath}>{tab === 'files' ? rootPath : snapshot.gitStatus?.branch || rootPath}</div>
         <div className="file-list file-browser-host">
-          {preview ? (
+          {tab === 'changes' ? (
+            <div className="file-changes-view">
+              {snapshot.gitLoading ? <div className="file-loading loading">正在读取 Git 变更…</div> : null}
+              {!snapshot.gitLoading && snapshot.gitError ? <div className="file-tree-status error">{snapshot.gitError}</div> : null}
+              {!snapshot.gitLoading && !snapshot.gitError && snapshot.gitStatus && !snapshot.gitStatus.isRepository ? <div className="file-loading">当前文件夹不是 Git 仓库。</div> : null}
+              {!snapshot.gitLoading && snapshot.gitStatus?.isRepository && snapshot.gitStatus.changes.length === 0 ? <div className="file-loading">工作区干净。</div> : null}
+              <div className="file-change-list">
+                {snapshot.gitStatus?.changes.map((change) => (
+                  <button className={`file-change-row${snapshot.selectedGitPath === change.path ? ' active' : ''}`} type="button" key={change.path} onClick={() => void controller.selectGitChange(change.path)}>
+                    <span className={`file-change-status ${gitChangeLabel(change.indexStatus, change.worktreeStatus)}`}>{gitChangeLabel(change.indexStatus, change.worktreeStatus)}</span>
+                    <span className="file-change-path" title={change.path}>{change.path}</span>
+                  </button>
+                ))}
+              </div>
+              {snapshot.selectedGitPath ? <div className="file-change-diff"><div className="file-change-diff-head">{snapshot.gitDiffLoading ? '正在加载 diff…' : snapshot.gitDiff?.path}</div>{!snapshot.gitDiffLoading && snapshot.gitDiff ? <pre>{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre> : null}</div> : null}
+            </div>
+          ) : preview ? (
             <div className="file-preview-view">
               <div className="file-preview-shell">
                 <div className="file-preview-header">

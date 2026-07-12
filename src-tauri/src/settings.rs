@@ -28,6 +28,10 @@ pub struct DesktopSettings {
     pub tau_port: u16,
     pub minimize_to_tray: bool,
     pub autostart: bool,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+    #[serde(default)]
+    pub trusted_project_paths: Vec<String>,
 }
 
 impl Default for DesktopSettings {
@@ -39,8 +43,22 @@ impl Default for DesktopSettings {
             tau_port: 3001,
             minimize_to_tray: true,
             autostart: false,
+            permission_mode: default_permission_mode(),
+            trusted_project_paths: Vec::new(),
         }
     }
+}
+
+pub fn is_project_trusted(path: &std::path::Path) -> bool {
+    let requested = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    load().trusted_project_paths.iter().any(|item| {
+        let saved = PathBuf::from(item).canonicalize().unwrap_or_else(|_| PathBuf::from(item));
+        saved == requested
+    })
+}
+
+fn default_permission_mode() -> String {
+    "ask".to_string()
 }
 
 pub fn load() -> DesktopSettings {

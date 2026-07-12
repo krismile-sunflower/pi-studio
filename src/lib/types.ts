@@ -1,6 +1,6 @@
 export type TransportKind = 'rpc' | 'mirror';
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'disconnected';
-export type WorkspaceView = 'chat' | 'projects' | 'extensions' | 'settings';
+export type WorkspaceView = 'chat' | 'projects' | 'changes' | 'extensions' | 'settings';
 export type ThemeId = 'dark' | 'light';
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
 
@@ -221,7 +221,29 @@ export interface FileContent {
 
 export interface DesktopSettings {
   tauPort?: number;
+  /** Tool permission policy enforced by the bundled Pi extension. */
+  permissionMode?: 'ask' | 'read-only' | 'full-access' | string;
+  trustedProjectPaths?: string[];
   [key: string]: unknown;
+}
+
+export interface GitChange {
+  path: string;
+  originalPath?: string;
+  indexStatus: string;
+  worktreeStatus: string;
+}
+
+export interface GitStatus {
+  root: string;
+  branch?: string;
+  isRepository: boolean;
+  changes: GitChange[];
+}
+
+export interface GitFileDiff {
+  path: string;
+  diff: string;
 }
 
 export interface PiRuntimeInfo {
@@ -403,5 +425,11 @@ export interface AppSnapshot {
   showThinking: boolean;
   authConfigured: boolean;
   authEnabled: boolean;
+  gitStatus: GitStatus | null;
+  gitLoading: boolean;
+  gitError: string;
+  selectedGitPath: string | null;
+  gitDiff: GitFileDiff | null;
+  gitDiffLoading: boolean;
   extensionUiRequest: ExtensionUiRequest | null;
 }

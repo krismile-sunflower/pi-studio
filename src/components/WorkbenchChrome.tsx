@@ -613,6 +613,7 @@ export function ExtensionDialog({ request }: { request: ExtensionUiRequest | nul
         if (event.key === 'Enter' && request.method === 'input') { event.preventDefault(); controller.respondToExtension(request, value.trim() ? { value: value.trim() } : { cancelled: true }); }
       }}>
         <div className="dialog-title">{title}</div>
+        {request.method === 'select' && request.title?.startsWith('Pi 请求权限') ? <div className="dialog-security-note">此授权只影响当前 Pi 会话；可在设置中随时调整默认权限策略。</div> : null}
         {request.message ? <div className="dialog-message">{request.message}</div> : null}
         {request.method === 'select' ? <div className="dialog-options">{(request.options || []).map((option) => <button className="dialog-option" type="button" key={optionLabel(option)} onClick={() => controller.respondToExtension(request, { value: optionValue(option) })}>{optionLabel(option)}</button>)}</div> : null}
         {request.method === 'input' ? <input ref={fieldRef as React.RefObject<HTMLInputElement>} className="dialog-input" type="text" placeholder={String(request.placeholder || '')} value={value} onChange={(event) => setValue(event.target.value)} /> : null}

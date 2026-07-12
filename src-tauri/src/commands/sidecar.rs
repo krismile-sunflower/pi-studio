@@ -264,6 +264,7 @@ pub async fn start_pi_process(
     let extension_dir = resolve_extension_dir(&app);
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
     let models_refresh_extension = resolve_models_refresh_extension(&app);
+    let permissions_extension = resolve_permissions_extension(&app);
 
     let mut command = Command::new(&pi_command.program);
     configure_hidden_process(&mut command);
@@ -276,14 +277,17 @@ pub async fn start_pi_process(
         .arg(normalize_child_path(resolve_extension_file(&app)))
         .arg("--session-dir")
         .arg(session_dir)
-        .arg("--no-approve")
         .env("TAU_MIRROR_PORT", port.to_string())
         .env("TAU_HOST", "127.0.0.1")
         .env("TAU_STATIC_DIR", static_dir)
         .env("TAU_DESKTOP", "1")
         .stdin(Stdio::piped());
+    command.arg(if crate::settings::is_project_trusted(&project_path) { "--approve" } else { "--no-approve" });
 
     if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
+    if let Some(extension) = permissions_extension {
         command.arg("--extension").arg(extension);
     }
 
@@ -373,6 +377,7 @@ async fn start_pi_rpc_process(
     let pi_command = resolve_pi_command(&app)?;
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
     let models_refresh_extension = resolve_models_refresh_extension(&app);
+    let permissions_extension = resolve_permissions_extension(&app);
     crate::settings::append_desktop_log(format!(
         "starting Pi RPC command={} cwd={} session_dir={} models_refresh={}",
         pi_command.display,
@@ -393,13 +398,16 @@ async fn start_pi_rpc_process(
         .arg("rpc")
         .arg("--session-dir")
         .arg(session_dir)
-        .arg("--no-approve")
         .env("TAU_DESKTOP", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    command.arg(if crate::settings::is_project_trusted(&project_path) { "--approve" } else { "--no-approve" });
 
     if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
+    if let Some(extension) = permissions_extension {
         command.arg("--extension").arg(extension);
     }
 
@@ -884,6 +892,22 @@ fn resolve_models_refresh_extension(app: &AppHandle) -> Option<PathBuf> {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("extensions")
                 .join("models-refresh.ts"),
+        ),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
+        .map(normalize_child_path)
+}
+
+fn resolve_permissions_extension(app: &AppHandle) -> Option<PathBuf> {
+    let candidates = [
+        resolve_extension_dir(app).map(|dir| dir.join("permissions.ts")),
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("extensions")
+                .join("permissions.ts"),
         ),
     ];
     candidates

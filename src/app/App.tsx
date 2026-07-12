@@ -6,7 +6,7 @@ import { useAppSnapshot } from './store';
 import { FileSidebar } from '../components/FileSidebar';
 import { MessageList } from '../components/MessageList';
 import { Sidebar } from '../components/Sidebar';
-import { ExtensionsView, ProjectsView, SettingsView } from '../components/Views';
+import { ChangesView, ExtensionsView, ProjectsView, SettingsView } from '../components/Views';
 import {
   CommandPalette,
   Composer,
@@ -271,6 +271,7 @@ export function App() {
             onToggleFiles={toggleFiles}
           />
           {snapshot.view === 'projects' ? <ProjectsView snapshot={snapshot} /> : null}
+          {snapshot.view === 'changes' ? <ChangesView snapshot={snapshot} /> : null}
           {snapshot.view === 'settings' ? <SettingsView snapshot={snapshot} /> : null}
           {snapshot.view === 'extensions' ? <ExtensionsView snapshot={snapshot} /> : null}
           {snapshot.view === 'chat' ? (
@@ -301,6 +302,7 @@ export function App() {
         <FileSidebar
           rootPath={snapshot.workspace.path}
           open={fileOpen}
+          snapshot={snapshot}
           onClose={() => {
             setFileOpen(false);
             localStorage.setItem('tau-file-sidebar', 'closed');

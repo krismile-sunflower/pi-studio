@@ -110,6 +110,8 @@ pub fn run() {
             commands::extensions::install_pi_extension,
             commands::extensions::list_pi_extensions,
             commands::files::list_files,
+            commands::git::get_git_status,
+            commands::git::get_git_file_diff,
             commands::models::get_models_config,
             commands::models::save_models_config,
             commands::models::open_models_config,

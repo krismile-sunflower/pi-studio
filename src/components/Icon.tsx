@@ -6,6 +6,7 @@ export type IconName =
   | 'bars'
   | 'brain'
   | 'chart'
+  | 'changes'
   | 'check'
   | 'chevron'
   | 'close'
@@ -35,6 +36,7 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   chart: <path d="M4 19V9M10 19V5M16 19v-7M22 19V3" />,
+  changes: <><path d="M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Z" /><path d="M7 8h10M7 12h10M7 16h6" /></>,
   check: <path d="M20 6 9 17l-5-5" />,
   chevron: <path d="m9 18 6-6-6-6" />,
   close: <path d="m18 6-12 12M6 6l12 12" />,

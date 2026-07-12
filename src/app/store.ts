@@ -49,6 +49,12 @@ const initialSnapshot: AppSnapshot = {
   showThinking: localStorage.getItem('tau-show-thinking') !== 'false',
   authConfigured: false,
   authEnabled: false,
+  gitStatus: null,
+  gitLoading: false,
+  gitError: '',
+  selectedGitPath: null,
+  gitDiff: null,
+  gitDiffLoading: false,
   extensionUiRequest: null,
 };
 

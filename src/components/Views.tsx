@@ -129,6 +129,66 @@ export function ProjectsView({ snapshot }: { snapshot: AppSnapshot }) {
   );
 }
 
+function gitChangeLabel(indexStatus: string, worktreeStatus: string): string {
+  const status = `${indexStatus}${worktreeStatus}`;
+  if (status.includes('A') || status === '??') return '新增';
+  if (status.includes('D')) return '删除';
+  if (status.includes('R')) return '重命名';
+  return '修改';
+}
+
+export function ChangesView({ snapshot }: { snapshot: AppSnapshot }) {
+  const git = snapshot.gitStatus;
+  const selected = snapshot.selectedGitPath;
+  const changeCount = git?.changes.length || 0;
+  return (
+    <section className="changes-panel workspace-view">
+      <div className="settings-header changes-header">
+        <div className="settings-header-copy">
+          <span className="eyebrow">工作区</span>
+          <div className="settings-title-row">
+            <h3>Git 变更</h3>
+            <button className="settings-close" type="button" aria-label="关闭变更中心" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button>
+          </div>
+          <p className="settings-subtitle">查看当前项目的未提交改动；此处不会修改仓库。</p>
+        </div>
+        <button className="settings-action-btn" type="button" onClick={() => void controller.loadGitStatus()} disabled={snapshot.gitLoading}>
+          {snapshot.gitLoading ? '刷新中…' : '刷新'}
+        </button>
+      </div>
+
+      {snapshot.gitError ? <div className="changes-notice error">{snapshot.gitError}</div> : null}
+      {!snapshot.gitLoading && !snapshot.gitError && git && !git.isRepository ? <div className="changes-notice">当前文件夹不是 Git 仓库。</div> : null}
+      {git?.isRepository ? (
+        <div className="changes-workbench">
+          <aside className="changes-file-list">
+            <div className="changes-summary">
+              <span className="changes-branch">{git.branch || 'HEAD'}</span>
+              <span>{changeCount ? `${changeCount} 个文件有改动` : '工作区干净'}</span>
+            </div>
+            {git.changes.length ? git.changes.map((change) => (
+              <button className={`change-file${selected === change.path ? ' active' : ''}`} key={change.path} type="button" onClick={() => void controller.selectGitChange(change.path)}>
+                <span className={`change-status ${gitChangeLabel(change.indexStatus, change.worktreeStatus)}`}>{gitChangeLabel(change.indexStatus, change.worktreeStatus)}</span>
+                <span className="change-file-copy"><strong>{change.path}</strong>{change.originalPath ? <small>{change.originalPath} → {change.path}</small> : null}</span>
+              </button>
+            )) : <div className="changes-empty">没有未提交的改动。</div>}
+          </aside>
+          <article className="changes-diff-panel">
+            {!selected ? <div className="changes-empty">选择左侧文件以查看 diff。</div> : null}
+            {snapshot.gitDiffLoading ? <div className="changes-empty">正在读取 diff…</div> : null}
+            {selected && !snapshot.gitDiffLoading && snapshot.gitDiff ? (
+              <>
+                <div className="changes-diff-header"><strong>{snapshot.gitDiff.path}</strong><span>相对 HEAD</span></div>
+                <pre className="changes-diff">{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre>
+              </>
+            ) : null}
+          </article>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function Toggle({ enabled, label, onChange, disabled = false }: { enabled: boolean; label: string; onChange(value: boolean): void; disabled?: boolean }) {
   return <button className={`settings-toggle${enabled ? ' on' : ''}`} type="button" aria-label={label} aria-pressed={enabled} disabled={disabled} onClick={() => onChange(!enabled)} />;
 }
@@ -156,7 +216,7 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
               <Icon name="close" width={16} height={16} />
             </button>
           </div>
-          <p className="settings-subtitle">外观、模型提供商、Pi 运行时与桌面行为</p>
+          <p className="settings-subtitle">外观、权限、模型提供商、Pi 运行时与桌面行为</p>
         </div>
       </div>
 
@@ -221,6 +281,58 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
                 </div>
               ) : null}
             </div>
+          </div>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">权限</div>
+          <div className="settings-section settings-section-wide">
+            <div className="settings-section-title-row">
+              <div>
+                <div className="settings-section-title">工具执行权限</div>
+                <p className="settings-help settings-help-inline">控制 Pi 读取、修改文件和运行命令时的授权方式；变更会立即应用到当前会话。</p>
+              </div>
+            </div>
+            <div className="permission-mode-grid" role="radiogroup" aria-label="Pi 工具执行权限">
+              {([
+                ['ask', '请求确认', '读取和搜索自动允许；修改文件或执行命令前询问。'],
+                ['read-only', '只读', '仅允许读取、搜索和列出文件；阻止修改及命令执行。'],
+                ['full-access', '完全访问', '不显示确认，直接执行 Pi 的全部工具操作。'],
+              ] as const).map(([mode, title, description]) => {
+                const active = (snapshot.settings?.permissionMode || 'ask') === mode;
+                return (
+                  <button
+                    className={`permission-mode-card${active ? ' active' : ''}${mode === 'full-access' ? ' caution' : ''}`}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    key={mode}
+                    disabled={!window.tauDesktop.isTauri || !snapshot.settings}
+                    onClick={() => void controller.setPermissionMode(mode)}
+                  >
+                    <span className="permission-mode-title">{title}</span>
+                    <span className="permission-mode-description">{description}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="trust-row">
+              <div className="trust-copy">
+                <strong>项目可信任</strong>
+                <span title={snapshot.workspace.path || undefined}>
+                  {snapshot.workspace.noFolder || !snapshot.workspace.path
+                    ? '无文件夹会话不加载项目级 .pi 资源。'
+                    : '可信任后，Pi 可加载此项目中的 .pi 设置、扩展与技能。'}
+                </span>
+              </div>
+              {snapshot.workspace.noFolder || !snapshot.workspace.path ? null : (() => {
+                const trusted = (snapshot.settings?.trustedProjectPaths || []).includes(snapshot.workspace.path);
+                return <button className={`settings-action-btn${trusted ? ' danger' : ' primary'}`} type="button" onClick={() => void controller.setProjectTrusted(snapshot.workspace.path, !trusted)}>
+                  {trusted ? '撤销可信任' : '信任此项目'}
+                </button>;
+              })()}
+            </div>
+            {!snapshot.workspace.noFolder && snapshot.workspace.path ? <p className="settings-help">项目可信任变更会在下次启动该项目的 Pi 会话时生效。</p> : null}
           </div>
         </div>
 
