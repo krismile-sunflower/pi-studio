@@ -54,6 +54,11 @@ export default function (pi: ExtensionAPI) {
     if (level === "off") return removeOffReasoning(payload);
 
     const model = ctx.model;
+    const thinkingFormat = object(model?.compat)?.thinkingFormat;
+    // Pi supports provider-specific thinking payloads (DeepSeek, Qwen,
+    // OpenRouter, etc.). Let Pi build those formats; this extension only
+    // normalizes OpenAI's standard reasoning_effort payloads.
+    if (typeof thinkingFormat === "string" && thinkingFormat !== "reasoning_effort") return;
     const mappedEffort = model?.thinkingLevelMap?.[level];
     // Old pi-studio configs serialized “最高” as `xhigh: "high"`.  A running
     // Pi session can retain that model object after the config has been fixed,

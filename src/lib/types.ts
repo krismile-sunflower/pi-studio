@@ -281,6 +281,7 @@ export interface ModelsProviderModel {
   input?: Array<'text' | 'image' | string>;
   contextWindow?: number;
   maxTokens?: number;
+  compat?: ModelsProviderCompat;
   [key: string]: unknown;
 }
 
@@ -295,6 +296,9 @@ export interface ReasoningProfile {
 export interface ModelsProviderCompat {
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
+  supportsUsageInStreaming?: boolean;
+  maxTokensField?: 'max_completion_tokens' | 'max_tokens' | string;
+  thinkingFormat?: 'reasoning_effort' | 'openrouter' | 'deepseek' | 'together' | 'zai' | 'qwen' | 'chat-template' | 'qwen-chat-template' | string;
   [key: string]: unknown;
 }
 

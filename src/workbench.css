@@ -1077,6 +1077,8 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   user-select: none;
 }
 .provider-check.compact { justify-content: center; min-width: 56px; }
+.provider-compat-field { display: flex; min-width: 150px; flex-direction: column; gap: 4px; color: var(--text-secondary); font-size: 10px; }
+.provider-compat-field .settings-text-input { min-height: 30px; font-size: 11px; }
 .provider-models-header {
   display: flex;
   align-items: center;
@@ -1110,6 +1112,10 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   align-items: center;
 }
 .provider-model-entry { display: flex; flex-direction: column; gap: 7px; }
+.provider-model-capabilities { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 2px; color: var(--text-dim); font-size: 10px; }
+.provider-model-capabilities span { padding: 2px 6px; border-radius: 999px; background: var(--bg-panel); }
+.provider-model-limit-field { display: inline-flex; align-items: center; gap: 6px; }
+.provider-model-limit-field .settings-text-input { width: 138px; min-height: 28px; font-size: 11px; }
 .provider-model-actions { display: inline-flex; gap: 6px; white-space: nowrap; }
 .provider-model-actions .settings-action-btn { min-width: 0; padding-inline: 8px; white-space: nowrap; }
 .provider-model-test-result { padding: 10px; border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--success) 5%, var(--bg-panel)); color: var(--text-secondary); font-size: 11px; }

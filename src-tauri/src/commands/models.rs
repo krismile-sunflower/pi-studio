@@ -43,6 +43,10 @@ pub struct FetchedModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
 }
 
@@ -205,6 +209,8 @@ pub async fn fetch_provider_models(
             .find(|item| item.id.eq_ignore_ascii_case(&model.id))
         {
             model.context_window = metadata.context_window;
+            model.max_tokens = metadata.max_tokens;
+            model.input = metadata.input.clone();
             model.reasoning = metadata.reasoning;
             if model.name == model.id && metadata.name != metadata.id {
                 model.name = metadata.name.clone();
@@ -431,16 +437,16 @@ fn validate_provider(provider_name: &str, provider_value: &mut Value) -> Result<
             }
 
             if let Some(context_window) = model.get("contextWindow").and_then(Value::as_i64) {
-                if context_window <= 0 {
+                if context_window < 0 {
                     return Err(format!(
-                        "Provider `{provider_name}`, model `{id}`: contextWindow must be > 0"
+                        "Provider `{provider_name}`, model `{id}`: contextWindow must not be negative"
                     ));
                 }
             }
             if let Some(max_tokens) = model.get("maxTokens").and_then(Value::as_i64) {
-                if max_tokens <= 0 {
+                if max_tokens < 0 {
                     return Err(format!(
-                        "Provider `{provider_name}`, model `{id}`: maxTokens must be > 0"
+                        "Provider `{provider_name}`, model `{id}`: maxTokens must not be negative"
                     ));
                 }
             }
@@ -451,6 +457,15 @@ fn validate_provider(provider_name: &str, provider_value: &mut Value) -> Result<
             // Materialize the selected profile to Pi's model map. Pi uses null
             // for unsupported; omission of `off` means a normal request with no reasoning field.
             let mut cleaned = model_value.clone();
+            // Public model catalogs use 0 when no text-output limit is known
+            // (notably for image models). Pi expects this optional field to be
+            // absent rather than zero.
+            if cleaned.get("maxTokens").and_then(Value::as_i64) == Some(0) {
+                cleaned.as_object_mut().expect("model is an object").remove("maxTokens");
+            }
+            if cleaned.get("contextWindow").and_then(Value::as_i64) == Some(0) {
+                cleaned.as_object_mut().expect("model is an object").remove("contextWindow");
+            }
             if let (Some(profile_id), Some(all_profiles)) = (
                 model.get("reasoningProfile").and_then(Value::as_str),
                 profiles.as_ref(),
@@ -709,6 +724,8 @@ fn parse_fetched_models(payload: &Value) -> Vec<FetchedModel> {
                     .unwrap_or(id)
                     .to_string(),
                 context_window: None,
+                max_tokens: None,
+                input: None,
                 reasoning: None,
             })
         })
@@ -755,6 +772,11 @@ async fn fetch_public_model_catalog(client: &reqwest::Client) -> Vec<FetchedMode
                     .unwrap_or(id)
                     .to_string(),
                 context_window: model.pointer("/limit/context").and_then(Value::as_u64),
+                max_tokens: model.pointer("/limit/output").and_then(Value::as_u64),
+                input: model
+                    .pointer("/modalities/input")
+                    .and_then(Value::as_array)
+                    .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()),
                 reasoning: model.get("reasoning").and_then(Value::as_bool),
             })
         })
@@ -828,6 +850,21 @@ mod tests {
             normalized["providers"]["openai"]["models"][0]["thinkingLevelMap"]["xhigh"],
             "xhigh"
         );
+    }
+
+    #[test]
+    fn omits_zero_max_tokens_from_catalog_metadata() {
+        let config = json!({ "providers": { "images": {
+            "baseUrl": "https://api.example.com/v1", "api": "openai-completions",
+            "models": [{ "id": "gpt-image", "contextWindow": 0, "maxTokens": 0 }]
+        }}});
+        let normalized = normalize_and_validate_config(config).expect("valid");
+        assert!(normalized["providers"]["images"]["models"][0]
+            .get("maxTokens")
+            .is_none());
+        assert!(normalized["providers"]["images"]["models"][0]
+            .get("contextWindow")
+            .is_none());
     }
 
     #[test]

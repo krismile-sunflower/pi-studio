@@ -635,6 +635,8 @@ function ProviderCard({
           name: model.name || model.id,
           reasoning: model.reasoning,
           contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          input: model.input,
         }));
       if (additions.length) {
         onChange({
@@ -737,6 +739,42 @@ function ProviderCard({
               />
               <span>禁用 reasoning_effort</span>
             </label>
+            <label className="provider-check">
+              <input
+                type="checkbox"
+                checked={provider.compat?.supportsUsageInStreaming !== false}
+                onChange={(event) => onChange({
+                  ...provider,
+                  compat: { ...(provider.compat || {}), supportsUsageInStreaming: event.target.checked },
+                })}
+              />
+              <span>流式响应包含 usage</span>
+            </label>
+            <label className="provider-compat-field">
+              <span>推理参数格式</span>
+              <select className="settings-text-input" value={provider.compat?.thinkingFormat || ''} onChange={(event) => {
+                const compat = { ...(provider.compat || {}) };
+                if (event.target.value) compat.thinkingFormat = event.target.value;
+                else delete compat.thinkingFormat;
+                onChange({ ...provider, compat });
+              }}>
+                <option value="">Pi 默认</option>
+                {['reasoning_effort', 'openrouter', 'deepseek', 'together', 'zai', 'qwen', 'chat-template', 'qwen-chat-template'].map((format) => <option value={format} key={format}>{format}</option>)}
+              </select>
+            </label>
+            <label className="provider-compat-field">
+              <span>最大输出字段</span>
+              <select className="settings-text-input" value={provider.compat?.maxTokensField || ''} onChange={(event) => {
+                const compat = { ...(provider.compat || {}) };
+                if (event.target.value) compat.maxTokensField = event.target.value;
+                else delete compat.maxTokensField;
+                onChange({ ...provider, compat });
+              }}>
+                <option value="">Pi 默认</option>
+                <option value="max_completion_tokens">max_completion_tokens</option>
+                <option value="max_tokens">max_tokens</option>
+              </select>
+            </label>
           </div>
 
           <div className="provider-models-header">
@@ -799,7 +837,7 @@ function ProviderCard({
                     className="settings-text-input"
                     type="number"
                     min={1}
-                    value={model.contextWindow ?? ''}
+                    value={model.contextWindow || ''}
                     placeholder="按模型文档填写"
                     onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : undefined })}
                   />
@@ -824,6 +862,20 @@ function ProviderCard({
                     </button>
                     <button className="settings-action-btn danger" type="button" onClick={() => removeModel(index)}>删除</button>
                   </div>
+                </div>
+                <div className="provider-model-capabilities">
+                  {model.input?.length ? <span>输入：{model.input.join('、')}</span> : null}
+                  <label className="provider-model-limit-field">
+                    <span>最大输出 Token</span>
+                    <input
+                      className="settings-text-input"
+                      type="number"
+                      min={1}
+                      value={model.maxTokens || ''}
+                      placeholder="按模型文档填写"
+                      onChange={(event) => updateModel(index, { maxTokens: event.target.value ? Number(event.target.value) : undefined })}
+                    />
+                  </label>
                 </div>
                 {!model.reasoningProfile && model.thinkingLevelMap ? (
                   <div className="provider-thinking-map provider-model-thinking-map">
