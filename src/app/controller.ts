@@ -11,6 +11,8 @@ import type {
   ModelInfo,
   ModelsConfig,
   ModelsConfigResponse,
+  ModelsProviderConfig,
+  ModelsProviderModel,
   PiExtensionInfo,
   PiExtensionsCatalog,
   PiInstance,
@@ -608,6 +610,28 @@ export class PiStudioController {
       notify('保存模型配置失败', String(error), 'error');
       return false;
     }
+  }
+
+  async fetchProviderModels(provider: ModelsProviderConfig): Promise<ModelsProviderModel[]> {
+    if (!isDesktop) {
+      notify('桌面端功能', '拉取模型仅在 pi-studio 桌面应用中可用。', 'warning');
+      return [];
+    }
+    try {
+      const result = await invoke<{ models?: ModelsProviderModel[] }>('fetch_provider_models', { request: { provider } });
+      return result.models || [];
+    } catch (error) {
+      notify('拉取模型失败', String(error), 'error');
+      return [];
+    }
+  }
+
+  async testProviderModel(provider: ModelsProviderConfig, modelId: string, reasoningProfile?: string, thinkingLevel = 'off', thinkingLevelMap?: ModelsProviderModel['thinkingLevelMap']): Promise<string> {
+    if (!isDesktop) throw new Error('模型测试仅在 pi-studio 桌面应用中可用。');
+    const result = await invoke<{ output?: string }>('test_provider_model', {
+      request: { provider, modelId, reasoningProfile, thinkingLevel, thinkingLevelMap },
+    });
+    return result.output || '';
   }
 
   /**

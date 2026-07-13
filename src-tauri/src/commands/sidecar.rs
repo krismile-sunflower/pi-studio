@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -55,7 +54,6 @@ pub struct PiUpdateResult {
     pub log: String,
 }
 
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartPiRequest {
@@ -103,7 +101,8 @@ pub async fn get_pi_runtime_info(app: AppHandle) -> Result<PiRuntimeInfo, String
     } else {
         None
     };
-    let can_update_bundled = source == "bundled" && bundled_platform_dir(&app).is_some_and(|dir| is_dir_writable(&dir));
+    let can_update_bundled =
+        source == "bundled" && bundled_platform_dir(&app).is_some_and(|dir| is_dir_writable(&dir));
     let can_update_system = source == "system";
 
     Ok(PiRuntimeInfo {
@@ -162,9 +161,9 @@ pub async fn update_pi_runtime(
     let result = match channel.as_str() {
         "system" => update_system_pi().await,
         "bundled" => update_bundled_pi(&app).await,
-        "override" => Err(
-            "当前使用 PI_DESKTOP_CLI 覆盖路径，请手动更新该可执行文件或取消环境变量。".into(),
-        ),
+        "override" => {
+            Err("当前使用 PI_DESKTOP_CLI 覆盖路径，请手动更新该可执行文件或取消环境变量。".into())
+        }
         other => Err(format!("当前运行时通道 `{other}` 不支持应用内更新。")),
     };
 
@@ -264,6 +263,7 @@ pub async fn start_pi_process(
     let extension_dir = resolve_extension_dir(&app);
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
     let models_refresh_extension = resolve_models_refresh_extension(&app);
+    let reasoning_payload_extension = resolve_reasoning_payload_extension(&app);
     let permissions_extension = resolve_permissions_extension(&app);
 
     let mut command = Command::new(&pi_command.program);
@@ -282,9 +282,16 @@ pub async fn start_pi_process(
         .env("TAU_STATIC_DIR", static_dir)
         .env("TAU_DESKTOP", "1")
         .stdin(Stdio::piped());
-    command.arg(if crate::settings::is_project_trusted(&project_path) { "--approve" } else { "--no-approve" });
+    command.arg(if crate::settings::is_project_trusted(&project_path) {
+        "--approve"
+    } else {
+        "--no-approve"
+    });
 
     if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
+    if let Some(extension) = reasoning_payload_extension {
         command.arg("--extension").arg(extension);
     }
     if let Some(extension) = permissions_extension {
@@ -377,6 +384,7 @@ async fn start_pi_rpc_process(
     let pi_command = resolve_pi_command(&app)?;
     let session_dir = normalize_child_path(pi_session_dir(&project_path)?);
     let models_refresh_extension = resolve_models_refresh_extension(&app);
+    let reasoning_payload_extension = resolve_reasoning_payload_extension(&app);
     let permissions_extension = resolve_permissions_extension(&app);
     crate::settings::append_desktop_log(format!(
         "starting Pi RPC command={} cwd={} session_dir={} models_refresh={}",
@@ -402,9 +410,16 @@ async fn start_pi_rpc_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    command.arg(if crate::settings::is_project_trusted(&project_path) { "--approve" } else { "--no-approve" });
+    command.arg(if crate::settings::is_project_trusted(&project_path) {
+        "--approve"
+    } else {
+        "--no-approve"
+    });
 
     if let Some(extension) = models_refresh_extension {
+        command.arg("--extension").arg(extension);
+    }
+    if let Some(extension) = reasoning_payload_extension {
         command.arg("--extension").arg(extension);
     }
     if let Some(extension) = permissions_extension {
@@ -901,6 +916,22 @@ fn resolve_models_refresh_extension(app: &AppHandle) -> Option<PathBuf> {
         .map(normalize_child_path)
 }
 
+fn resolve_reasoning_payload_extension(app: &AppHandle) -> Option<PathBuf> {
+    let candidates = [
+        resolve_extension_dir(app).map(|dir| dir.join("reasoning-payload.ts")),
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("extensions")
+                .join("reasoning-payload.ts"),
+        ),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
+        .map(normalize_child_path)
+}
+
 fn resolve_permissions_extension(app: &AppHandle) -> Option<PathBuf> {
     let candidates = [
         resolve_extension_dir(app).map(|dir| dir.join("permissions.ts")),
@@ -1163,11 +1194,7 @@ async fn fetch_latest_pi_version() -> Option<String> {
         .build()
         .ok()?;
 
-    if let Ok(response) = client
-        .get("https://pi.dev/api/latest-version")
-        .send()
-        .await
-    {
+    if let Ok(response) = client.get("https://pi.dev/api/latest-version").send().await {
         if let Ok(value) = response.json::<serde_json::Value>().await {
             let version = value
                 .get("version")
@@ -1428,7 +1455,9 @@ async fn remove_path_with_retry(path: &Path) -> Result<(), String> {
 /// debug/resource copy), also refresh the other so dev restarts pick up the new Pi.
 fn sibling_bundled_pi_package(platform_dir: &Path, target_package: &Path) -> Option<PathBuf> {
     let platform = platform_binaries_dir().ok()?;
-    let cargo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries").join(platform);
+    let cargo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(platform);
     let cargo_package = cargo_root.join("pi-package");
 
     let target_norm = normalize_child_path(target_package.to_path_buf());

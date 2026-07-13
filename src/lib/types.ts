@@ -276,10 +276,20 @@ export interface ModelsProviderModel {
   api?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  reasoningProfile?: string;
+  thinkingLevelMap?: Partial<Record<PiReasoningLevel, ProviderReasoningValue | null>>;
   input?: Array<'text' | 'image' | string>;
   contextWindow?: number;
   maxTokens?: number;
   [key: string]: unknown;
+}
+
+export type PiReasoningLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ProviderReasoningValue = 'omit' | 'unsupported' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export interface ReasoningProfile {
+  name?: string;
+  levelMap: Record<PiReasoningLevel, ProviderReasoningValue>;
 }
 
 export interface ModelsProviderCompat {
@@ -296,6 +306,7 @@ export interface ModelsProviderConfig {
   authHeader?: boolean;
   headers?: Record<string, string>;
   compat?: ModelsProviderCompat;
+  reasoningProfiles?: Record<string, ReasoningProfile>;
   models?: ModelsProviderModel[];
   modelOverrides?: Record<string, unknown>;
   [key: string]: unknown;

@@ -12,6 +12,7 @@ import { basename, formatRelativeTime } from '../lib/utils';
 import { applyTheme, getCurrentTheme, themes } from '../lib/theme';
 import { controller } from '../app/controller';
 import { Icon } from './Icon';
+import { DEFAULT_REASONING_PROFILE, migrateReasoningConfig, PI_REASONING_LEVELS, REASONING_UI_LABELS } from '../lib/reasoning';
 
 const API_OPTIONS = [
   'openai-completions',
@@ -20,12 +21,28 @@ const API_OPTIONS = [
   'google-generative-ai',
 ] as const;
 
+const THINKING_LEVELS = [
+  ['off', '关闭'],
+  ['minimal', '极简'],
+  ['low', '低'],
+  ['medium', '中'],
+  ['high', '高'],
+  ['xhigh', '最高'],
+] as const;
+
+const THINKING_LABELS: Record<string, string> = { off: '关闭', minimal: '极简', low: '较低', medium: '中等', high: '较高', xhigh: '最高', max: '最高' };
+
 function emptyProvider(): ModelsProviderConfig {
   return {
     baseUrl: '',
     api: 'openai-completions',
     apiKey: '',
     models: [],
+    // This is an explicit preset attached to a newly-created OpenAI-compatible
+    // provider; no model receives it until the user selects it on that model.
+    reasoningProfiles: {
+      'openai-gpt': structuredClone(DEFAULT_REASONING_PROFILE),
+    },
     compat: {
       supportsDeveloperRole: false,
       supportsReasoningEffort: false,
@@ -34,7 +51,7 @@ function emptyProvider(): ModelsProviderConfig {
 }
 
 function cloneConfig(config: ModelsConfig | null | undefined): ModelsConfig {
-  return JSON.parse(JSON.stringify(config || { providers: {} })) as ModelsConfig;
+  return migrateReasoningConfig(JSON.parse(JSON.stringify(config || { providers: {} })) as ModelsConfig);
 }
 
 function configSignature(config: ModelsConfig | null | undefined): string {
@@ -202,7 +219,6 @@ function runtimeSource(snapshot: AppSnapshot): string {
 
 export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
   const [theme, setTheme] = useState<ThemeId>(() => getCurrentTheme());
-  const thinkingLabels: Record<string, string> = { off: '关闭', minimal: '极简', low: '较低', medium: '中等', high: '较高', xhigh: '最高', max: '最高' };
   const info = snapshot.runtimeInfo;
   const canUpdate = Boolean(info?.canUpdateSystem || info?.canUpdateBundled);
   return (
@@ -253,7 +269,7 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
               <div className="settings-row">
                 <span className="settings-label">思考级别</span>
                 <button className="settings-value-btn" type="button" disabled={!snapshot.thinkingSupported} onClick={() => void controller.cycleThinking()}>
-                  {snapshot.thinkingSupported ? thinkingLabels[snapshot.thinkingLevel] || snapshot.thinkingLevel : '不可用'}
+                  {snapshot.thinkingSupported ? THINKING_LABELS[snapshot.thinkingLevel] || snapshot.thinkingLevel : '不可用'}
                 </button>
               </div>
               <div className="settings-row">
@@ -549,6 +565,7 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
             key={name}
             name={name}
             provider={provider}
+            thinkingLevel={snapshot.thinkingLevel || 'off'}
             expanded={editing === name}
             onToggle={() => setEditing((current) => (current === name ? null : name))}
             onChange={(next) => updateProvider(name, next)}
@@ -563,6 +580,7 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
 function ProviderCard({
   name,
   provider,
+  thinkingLevel,
   expanded,
   onToggle,
   onChange,
@@ -570,12 +588,16 @@ function ProviderCard({
 }: {
   name: string;
   provider: ModelsProviderConfig;
+  thinkingLevel: string;
   expanded: boolean;
   onToggle(): void;
   onChange(next: ModelsProviderConfig): void;
   onRemove(): void;
 }) {
   const models = provider.models || [];
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [testingModelIndex, setTestingModelIndex] = useState<number | null>(null);
+  const [testResults, setTestResults] = useState<Record<number, { output?: string; error?: string }>>({});
   const updateModel = (index: number, patch: Partial<ModelsProviderModel>) => {
     const nextModels = models.map((model, modelIndex) => (modelIndex === index ? { ...model, ...patch } : model));
     onChange({ ...provider, models: nextModels });
@@ -586,8 +608,62 @@ function ProviderCard({
   const addModel = () => {
     onChange({
       ...provider,
-      models: [...models, { id: '', name: '', reasoning: false, contextWindow: 128000 }],
+      models: [...models, { id: '', name: '' }],
     });
+  };
+  const profiles = provider.reasoningProfiles || {};
+  const addProfile = () => {
+    let id = 'openai-standard';
+    let suffix = 2;
+    while (profiles[id]) id = `openai-standard-${suffix++}`;
+    onChange({
+      ...provider,
+      compat: { ...(provider.compat || {}), supportsReasoningEffort: true },
+      reasoningProfiles: { ...profiles, [id]: structuredClone(DEFAULT_REASONING_PROFILE) },
+    });
+  };
+  const fetchModels = async () => {
+    setFetchingModels(true);
+    try {
+      const fetched = await controller.fetchProviderModels(provider);
+      if (!fetched.length) return;
+      const existing = new Set(models.map((model) => model.id).filter(Boolean));
+      const additions = fetched
+        .filter((model) => model.id && !existing.has(model.id))
+        .map((model) => ({
+          id: model.id,
+          name: model.name || model.id,
+          reasoning: model.reasoning,
+          contextWindow: model.contextWindow,
+        }));
+      if (additions.length) {
+        onChange({
+          ...provider,
+          models: [...models, ...additions],
+        });
+      }
+      window.dispatchEvent(new CustomEvent('pi-studio:toast', {
+        detail: {
+          title: additions.length ? '模型草稿已更新' : '模型列表已是最新',
+          message: additions.length ? `已添加 ${additions.length} 个模型。请明确选择兼容性预设后保存。` : '没有发现新的模型。',
+          type: 'success',
+        },
+      }));
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+  const testModel = async (index: number, model: ModelsProviderModel) => {
+    setTestingModelIndex(index);
+    setTestResults((current) => ({ ...current, [index]: {} }));
+    try {
+      const output = await controller.testProviderModel(provider, model.id || '', model.reasoningProfile, thinkingLevel, model.thinkingLevelMap);
+      setTestResults((current) => ({ ...current, [index]: { output } }));
+    } catch (error) {
+      setTestResults((current) => ({ ...current, [index]: { error: String(error) } }));
+    } finally {
+      setTestingModelIndex(null);
+    }
   };
 
   return (
@@ -664,11 +740,43 @@ function ProviderCard({
           </div>
 
           <div className="provider-models-header">
+            <div><strong>推理预设（Reasoning Profile）</strong><span className="provider-models-count">{Object.keys(profiles).length}</span></div>
+            <button className="settings-action-btn" type="button" onClick={addProfile}>添加 OpenAI 标准预设</button>
+          </div>
+          <p className="settings-help settings-help-inline">GPT 5.5 请在模型行选择 “OpenAI 标准” 预设；当前聊天选择“高”时，会发送 <code>high</code>。测试按钮也按当前聊天强度发送。</p>
+          <div className="provider-models">
+            {Object.entries(profiles).map(([profileId, profile]) => (
+              <div className="provider-model-entry" key={profileId}>
+                <div className="provider-thinking-map">
+                  <label className="provider-thinking-level"><span>预设名称</span><input className="settings-text-input" value={profile.name || profileId} onChange={(event) => onChange({ ...provider, reasoningProfiles: { ...profiles, [profileId]: { ...profile, name: event.target.value } } })} /></label>
+                  {THINKING_LEVELS.map(([level, label]) => (
+                    <label className="provider-thinking-level" key={level}>
+                      <span>{level === 'off' ? REASONING_UI_LABELS.off : label}</span>
+                      <select className="settings-text-input" value={profile.levelMap[level]} onChange={(event) => onChange({ ...provider, reasoningProfiles: { ...profiles, [profileId]: { ...profile, levelMap: { ...profile.levelMap, [level]: event.target.value } } } })}>
+                        {level === 'off' ? <option value="omit">{REASONING_UI_LABELS.omit}</option> : null}
+                        {level !== 'off' ? <option value="unsupported">{REASONING_UI_LABELS.unsupported}</option> : null}
+                        {level !== 'off' ? PI_REASONING_LEVELS.filter((item) => item !== 'off').map((item) => <option value={item} key={item}>{item}</option>) : null}
+                      </select>
+                    </label>
+                  ))}
+                  <button className="settings-action-btn danger" type="button" onClick={() => { const next = { ...profiles }; delete next[profileId]; onChange({ ...provider, reasoningProfiles: next, models: models.map((model) => model.reasoningProfile === profileId ? { ...model, reasoningProfile: undefined, reasoning: undefined } : model) }); }}>删除预设</button>
+                </div>
+              </div>
+            ))}
+            {!Object.keys(profiles).length ? <div className="settings-help">没有预设。模型能力不会根据 ID 猜测；需要推理时请先添加并明确配置预设。</div> : null}
+          </div>
+
+          <div className="provider-models-header">
             <div>
               <strong>模型列表</strong>
               <span className="provider-models-count">{models.length}</span>
             </div>
-            <button className="settings-action-btn" type="button" onClick={addModel}>添加模型</button>
+            <div className="provider-models-actions">
+              <button className="settings-action-btn" type="button" onClick={() => void fetchModels()} disabled={fetchingModels}>
+                {fetchingModels ? '拉取中…' : '拉取模型'}
+              </button>
+              <button className="settings-action-btn" type="button" onClick={addModel}>添加模型</button>
+            </div>
           </div>
 
           <div className="provider-models">
@@ -678,27 +786,76 @@ function ProviderCard({
                 <span>模型 ID</span>
                 <span>显示名</span>
                 <span>Context</span>
-                <span>推理</span>
+                <span>推理预设</span>
                 <span />
               </div>
             ) : null}
             {models.map((model, index) => (
-              <div className="provider-model-row" key={`${name}-model-${index}`}>
-                <input className="settings-text-input" value={model.id || ''} placeholder="model-id" onChange={(event) => updateModel(index, { id: event.target.value })} />
-                <input className="settings-text-input" value={model.name || ''} placeholder="可选" onChange={(event) => updateModel(index, { name: event.target.value })} />
-                <input
-                  className="settings-text-input"
-                  type="number"
-                  min={1}
-                  value={model.contextWindow ?? ''}
-                  placeholder="128000"
-                  onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : undefined })}
-                />
-                <label className="provider-check compact">
-                  <input type="checkbox" checked={Boolean(model.reasoning)} onChange={(event) => updateModel(index, { reasoning: event.target.checked })} />
-                  <span>开启</span>
-                </label>
-                <button className="settings-action-btn danger" type="button" onClick={() => removeModel(index)}>删除</button>
+              <div className="provider-model-entry" key={`${name}-model-${index}`}>
+                <div className="provider-model-row">
+                  <input className="settings-text-input" value={model.id || ''} placeholder="model-id" onChange={(event) => updateModel(index, { id: event.target.value })} />
+                  <input className="settings-text-input" value={model.name || ''} placeholder="可选" onChange={(event) => updateModel(index, { name: event.target.value })} />
+                  <input
+                    className="settings-text-input"
+                    type="number"
+                    min={1}
+                    value={model.contextWindow ?? ''}
+                    placeholder="按模型文档填写"
+                    onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : undefined })}
+                  />
+                  <select className="settings-text-input" value={model.reasoningProfile || (model.reasoning || model.thinkingLevelMap ? '__model-map__' : '')} onChange={(event) => {
+                    const selected = event.target.value;
+                    const reasoningProfile = selected && selected !== '__model-map__' ? selected : undefined;
+                    const nextModels = models.map((item, modelIndex) => {
+                      if (modelIndex !== index) return item;
+                      if (selected === '__model-map__') return { ...item, reasoningProfile: undefined, reasoning: true };
+                      if (reasoningProfile) return { ...item, reasoningProfile, reasoning: true, thinkingLevelMap: undefined };
+                      return { ...item, reasoningProfile: undefined, reasoning: false, thinkingLevelMap: undefined };
+                    });
+                    onChange({ ...provider, compat: selected ? { ...(provider.compat || {}), supportsReasoningEffort: true } : provider.compat, models: nextModels });
+                  }}>
+                    <option value="">不支持推理</option>
+                    {(model.reasoning || model.thinkingLevelMap) && !model.reasoningProfile ? <option value="__model-map__">模型强度映射</option> : null}
+                    {Object.entries(profiles).map(([profileId, profile]) => <option value={profileId} key={profileId}>{profile.name || profileId}</option>)}
+                  </select>
+                  <div className="provider-model-actions">
+                    <button className="settings-action-btn" type="button" title={`按当前 Pi 强度「${THINKING_LABELS[thinkingLevel] || thinkingLevel}」测试`} onClick={() => void testModel(index, model)} disabled={testingModelIndex !== null}>
+                      {testingModelIndex === index ? '测试中…' : `测试·${THINKING_LABELS[thinkingLevel] || thinkingLevel}`}
+                    </button>
+                    <button className="settings-action-btn danger" type="button" onClick={() => removeModel(index)}>删除</button>
+                  </div>
+                </div>
+                {!model.reasoningProfile && model.thinkingLevelMap ? (
+                  <div className="provider-thinking-map provider-model-thinking-map">
+                    <span className="provider-thinking-map-label">模型强度映射<br />直接配置，保存后按此映射发送</span>
+                    {THINKING_LEVELS.map(([level, label]) => {
+                      const configured = model.thinkingLevelMap?.[level];
+                      const value = configured === null ? 'unsupported' : typeof configured === 'string' ? configured : level === 'off' ? 'omit' : 'unsupported';
+                      return (
+                        <label className="provider-thinking-level" key={level}>
+                          <span>{level === 'off' ? REASONING_UI_LABELS.off : label}</span>
+                          <select className="settings-text-input" value={value} onChange={(event) => {
+                            const selected = event.target.value;
+                            updateModel(index, {
+                              reasoning: true,
+                              thinkingLevelMap: { ...(model.thinkingLevelMap || {}), [level]: selected === 'unsupported' ? null : selected },
+                            });
+                          }}>
+                            {level === 'off' ? <option value="omit">{REASONING_UI_LABELS.omit}</option> : null}
+                            {level !== 'off' ? <option value="unsupported">{REASONING_UI_LABELS.unsupported}</option> : null}
+                            {level !== 'off' ? PI_REASONING_LEVELS.filter((item) => item !== 'off').map((item) => <option value={item} key={item}>{item}</option>) : null}
+                          </select>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {testResults[index] ? (
+                  <div className={`provider-model-test-result${testResults[index].error ? ' error' : ''}`}>
+                    <strong>{testResults[index].error ? '测试失败' : '非流式响应'}</strong>
+                    <pre>{testResults[index].error || testResults[index].output}</pre>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

@@ -775,18 +775,25 @@ export default function (pi: ExtensionAPI) {
 
         // ─── Thinking ───
         case "cycle_thinking_level": {
-          const levels = ["off", "minimal", "low", "medium", "high"];
-          const current = currentThinkingLevel(ctx?.sessionManager.getEntries?.() || []);
+          const allLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+          const model = ctx?.model;
+          const levels = model?.reasoning
+            ? allLevels.filter((level) => {
+              const mapped = model.thinkingLevelMap?.[level];
+              return mapped !== null && (level !== "xhigh" || mapped !== undefined);
+            })
+            : ["off"];
+          const current = ctx?.getThinkingLevel?.() || currentThinkingLevel(ctx?.sessionManager.getEntries?.() || []);
           const idx = levels.indexOf(current);
           const next = levels[(idx + 1) % levels.length];
           activePi.setThinkingLevel(next as any);
-          sendTo(ws, success("cycle_thinking_level", { level: next }));
+          sendTo(ws, success("cycle_thinking_level", { level: ctx?.getThinkingLevel?.() || next }));
           break;
         }
 
         case "set_thinking_level": {
           activePi.setThinkingLevel(command.level);
-          sendTo(ws, success("set_thinking_level"));
+          sendTo(ws, success("set_thinking_level", { level: ctx?.getThinkingLevel?.() || command.level }));
           break;
         }
 
@@ -2092,7 +2099,9 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
       const sessionFile = ctx.sessionManager.getSessionFile() || "";
       registerInstance(port, sessionFile, ctx.cwd || process.cwd());
 
-      ctx.ui.notify(`Tau mirror: ${mirrorUrl}${tailscaleUrl ? `  •  Tailscale: ${tailscaleUrl}` : ""}  •  /qr for QR code`, "info");
+      // Starting or resuming a Pi session can initialize this extension again.
+      // Keep the mirror address in the status bar, but do not open a blocking
+      // extension dialog on every session switch.
     };
 
     tryListen(PORT);

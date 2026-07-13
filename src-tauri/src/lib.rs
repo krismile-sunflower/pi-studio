@@ -114,6 +114,8 @@ pub fn run() {
             commands::git::get_git_file_diff,
             commands::models::get_models_config,
             commands::models::save_models_config,
+            commands::models::fetch_provider_models,
+            commands::models::test_provider_model,
             commands::models::open_models_config,
             commands::sidecar::get_pi_runtime_info,
             commands::sidecar::check_pi_update,

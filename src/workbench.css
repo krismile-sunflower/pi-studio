@@ -1086,6 +1086,7 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   color: var(--text-primary);
   font-size: 12px;
 }
+.provider-models-actions { display: inline-flex; align-items: center; gap: 8px; }
 .provider-models-count {
   display: inline-flex;
   min-width: 18px;
@@ -1104,10 +1105,29 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
 .provider-model-table-head,
 .provider-model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px 72px 72px;
+  grid-template-columns: minmax(150px, 1.3fr) minmax(112px, 1fr) 110px 148px 132px;
   gap: 8px;
   align-items: center;
 }
+.provider-model-entry { display: flex; flex-direction: column; gap: 7px; }
+.provider-model-actions { display: inline-flex; gap: 6px; white-space: nowrap; }
+.provider-model-actions .settings-action-btn { min-width: 0; padding-inline: 8px; white-space: nowrap; }
+.provider-model-test-result { padding: 10px; border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--success) 5%, var(--bg-panel)); color: var(--text-secondary); font-size: 11px; }
+.provider-model-test-result.error { border-color: color-mix(in srgb, var(--error) 38%, var(--border)); background: color-mix(in srgb, var(--error) 5%, var(--bg-panel)); }
+.provider-model-test-result pre { margin: 6px 0 0; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--text-primary); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.provider-thinking-map {
+  display: grid;
+  grid-template-columns: minmax(136px, 1.4fr) repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-panel);
+}
+.provider-thinking-map-label { color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+.provider-thinking-level { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 10px; }
+.provider-thinking-level .settings-text-input { min-width: 0; padding-right: 4px; font-size: 10px; }
 .provider-model-table-head {
   padding: 0 2px;
   color: var(--text-dim);
@@ -1127,7 +1147,8 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   .provider-form-grid,
   .provider-model-table-head,
   .provider-model-row,
-  .provider-toolbar { grid-template-columns: 1fr; }
+  .provider-toolbar,
+  .provider-thinking-map { grid-template-columns: 1fr; }
   .settings-kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-model-table-head { display: none; }
   .settings-section-title-row { flex-direction: column; align-items: stretch; }
