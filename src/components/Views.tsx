@@ -501,10 +501,11 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
   return (
     <div className="settings-section settings-section-wide models-section">
       <div className="settings-section-title-row">
-        <div>
-          <div className="settings-section-title">模型提供商</div>
+        <div className="models-section-heading">
+          <span className="models-section-eyebrow">MODEL CONFIGURATION</span>
+          <div className="settings-section-title">模型供应商</div>
           <p className="settings-help settings-help-inline">
-            编辑 `~/.pi/agent/models.json`，保存后自动刷新可用模型
+            管理 API 连接、兼容性和模型能力。保存后自动刷新可用模型
             {dirty ? ' · 有未保存更改' : ''}
           </p>
         </div>
@@ -537,20 +538,26 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
       ) : null}
 
       <div className="provider-toolbar">
-        <input
-          className="settings-text-input"
-          type="text"
-          placeholder="新 provider 名称，例如 ollama"
-          value={newProviderName}
-          onChange={(event) => setNewProviderName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              addProvider();
-            }
-          }}
-        />
-        <button className="settings-action-btn" type="button" onClick={addProvider}>添加 Provider</button>
+        <div className="provider-toolbar-copy">
+          <strong>供应商列表</strong>
+          <span>{providers.length ? `${providers.length} 个已配置` : '添加一个 API 供应商开始使用'}</span>
+        </div>
+        <div className="provider-toolbar-actions">
+          <input
+            className="settings-text-input"
+            type="text"
+            placeholder="输入名称，例如 ollama"
+            value={newProviderName}
+            onChange={(event) => setNewProviderName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                addProvider();
+              }
+            }}
+          />
+          <button className="settings-action-btn primary" type="button" onClick={addProvider}>添加供应商</button>
+        </div>
       </div>
 
       <div className="provider-list">
@@ -598,6 +605,7 @@ function ProviderCard({
   const [fetchingModels, setFetchingModels] = useState(false);
   const [testingModelIndex, setTestingModelIndex] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { output?: string; error?: string }>>({});
+  const [showApiKey, setShowApiKey] = useState(false);
   const updateModel = (index: number, patch: Partial<ModelsProviderModel>) => {
     const nextModels = models.map((model, modelIndex) => (modelIndex === index ? { ...model, ...patch } : model));
     onChange({ ...provider, models: nextModels });
@@ -671,22 +679,29 @@ function ProviderCard({
   return (
     <article className={`provider-card${expanded ? ' expanded' : ''}`}>
       <button className="provider-card-header" type="button" onClick={onToggle}>
+        <span className="provider-card-mark" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
         <div className="provider-card-main">
           <div className="provider-card-title-row">
             <strong className="provider-card-name">{name}</strong>
-            <span className="provider-badge">{models.length} 模型</span>
-            <span className="provider-badge muted">{provider.api || 'api 未设'}</span>
+            <span className="provider-badge">{models.length} 个模型</span>
+            <span className="provider-badge muted">{provider.api || 'API 未设置'}</span>
           </div>
           <span className="provider-card-meta">
             {provider.baseUrl || '未设置 baseUrl'} · Key {maskApiKey(provider.apiKey)}
           </span>
         </div>
-        <span className="provider-card-chevron">{expanded ? '收起' : '编辑'}</span>
+        <div className="provider-card-stats" aria-hidden="true">
+          <span><strong>{models.length}</strong><small>模型</small></span>
+          <span><strong>{Object.keys(provider.reasoningProfiles || {}).length}</strong><small>预设</small></span>
+        </div>
+        <span className="provider-card-chevron">{expanded ? '收起' : '配置'} <span aria-hidden="true">{expanded ? '⌃' : '⌄'}</span></span>
       </button>
 
       {expanded ? (
         <div className="provider-card-body">
-          <div className="provider-form-grid">
+          <div className="provider-subsection">
+            <div className="provider-subsection-heading"><strong>连接配置</strong><span>请求地址和鉴权信息</span></div>
+            <div className="provider-form-grid">
             <label className="provider-field">
               <span>Base URL</span>
               <input className="settings-text-input" value={provider.baseUrl || ''} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
@@ -699,18 +714,32 @@ function ProviderCard({
             </label>
             <label className="provider-field provider-field-wide">
               <span>API Key</span>
-              <input
-                className="settings-text-input"
-                type="password"
-                value={provider.apiKey || ''}
-                onChange={(event) => onChange({ ...provider, apiKey: event.target.value })}
-                placeholder={provider.apiKey ? maskApiKey(provider.apiKey) : '可选，支持 $ENV 或 !command；留空保留原值'}
-                autoComplete="off"
-              />
+              <span className="provider-secret-input">
+                <input
+                  className="settings-text-input"
+                  type={showApiKey ? 'text' : 'password'}
+                  value={provider.apiKey || ''}
+                  onChange={(event) => onChange({ ...provider, apiKey: event.target.value })}
+                  placeholder={provider.apiKey ? maskApiKey(provider.apiKey) : '可选，支持 $ENV 或 !command；留空保留原值'}
+                  autoComplete="off"
+                />
+                <button
+                  className="provider-secret-toggle"
+                  type="button"
+                  onClick={() => setShowApiKey((visible) => !visible)}
+                  aria-label={showApiKey ? '隐藏 API Key' : '查看 API Key'}
+                  title={showApiKey ? '隐藏 API Key' : '查看 API Key'}
+                >
+                  <Icon name={showApiKey ? 'eye-off' : 'eye'} width={15} height={15} />
+                </button>
+              </span>
             </label>
+            </div>
           </div>
 
-          <div className="provider-compat-row">
+          <div className="provider-subsection">
+            <div className="provider-subsection-heading"><strong>兼容性设置</strong><span>根据供应商 API 行为调整请求格式</span></div>
+            <div className="provider-compat-row">
             <label className="provider-check">
               <input
                 type="checkbox"
@@ -775,18 +804,22 @@ function ProviderCard({
                 <option value="max_tokens">max_tokens</option>
               </select>
             </label>
+            </div>
           </div>
 
-          <div className="provider-models-header">
+          <div className="provider-models-header provider-section-header">
             <div><strong>推理预设（Reasoning Profile）</strong><span className="provider-models-count">{Object.keys(profiles).length}</span></div>
             <button className="settings-action-btn" type="button" onClick={addProfile}>添加 OpenAI 标准预设</button>
           </div>
           <p className="settings-help settings-help-inline">GPT 5.5 请在模型行选择 “OpenAI 标准” 预设；当前聊天选择“高”时，会发送 <code>high</code>。测试按钮也按当前聊天强度发送。</p>
           <div className="provider-models">
             {Object.entries(profiles).map(([profileId, profile]) => (
-              <div className="provider-model-entry" key={profileId}>
-                <div className="provider-thinking-map">
-                  <label className="provider-thinking-level"><span>预设名称</span><input className="settings-text-input" value={profile.name || profileId} onChange={(event) => onChange({ ...provider, reasoningProfiles: { ...profiles, [profileId]: { ...profile, name: event.target.value } } })} /></label>
+              <div className="provider-model-entry provider-profile-entry" key={profileId}>
+                <div className="provider-profile-toolbar">
+                  <label className="provider-field"><span>预设名称</span><input className="settings-text-input" value={profile.name || profileId} onChange={(event) => onChange({ ...provider, reasoningProfiles: { ...profiles, [profileId]: { ...profile, name: event.target.value } } })} /></label>
+                  <button className="settings-action-btn danger" type="button" onClick={() => { const next = { ...profiles }; delete next[profileId]; onChange({ ...provider, reasoningProfiles: next, models: models.map((model) => model.reasoningProfile === profileId ? { ...model, reasoningProfile: undefined, reasoning: undefined } : model) }); }}>删除预设</button>
+                </div>
+                <div className="provider-thinking-map provider-profile-map">
                   {THINKING_LEVELS.map(([level, label]) => (
                     <label className="provider-thinking-level" key={level}>
                       <span>{level === 'off' ? REASONING_UI_LABELS.off : label}</span>
@@ -797,14 +830,13 @@ function ProviderCard({
                       </select>
                     </label>
                   ))}
-                  <button className="settings-action-btn danger" type="button" onClick={() => { const next = { ...profiles }; delete next[profileId]; onChange({ ...provider, reasoningProfiles: next, models: models.map((model) => model.reasoningProfile === profileId ? { ...model, reasoningProfile: undefined, reasoning: undefined } : model) }); }}>删除预设</button>
                 </div>
               </div>
             ))}
             {!Object.keys(profiles).length ? <div className="settings-help">没有预设。模型能力不会根据 ID 猜测；需要推理时请先添加并明确配置预设。</div> : null}
           </div>
 
-          <div className="provider-models-header">
+          <div className="provider-models-header provider-section-header">
             <div>
               <strong>模型列表</strong>
               <span className="provider-models-count">{models.length}</span>

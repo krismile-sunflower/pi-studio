@@ -17,6 +17,8 @@ export type IconName =
   | 'folder'
   | 'grid'
   | 'image'
+  | 'eye'
+  | 'eye-off'
   | 'mic'
   | 'plus'
   | 'refresh'
@@ -65,6 +67,8 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="m21 15-5-5L5 21" />
     </>
   ),
+  eye: <><path d="M2.5 12s3.4-5 9.5-5 9.5 5 9.5 5-3.4 5-9.5 5-9.5-5-9.5-5Z" /><circle cx="12" cy="12" r="2.2" /></>,
+  'eye-off': <><path d="m3 3 18 18M10.6 6.3A10.9 10.9 0 0 1 12 6c6.1 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.2 3.6M6.2 6.9C3.8 8.4 2.5 12 2.5 12s3.4 6 9.5 6c1 0 2-.2 2.8-.5" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>,
   mic: <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 8v2a7 7 0 0 1-14 0v-2m7 9v3" />,
   plus: <path d="M12 5v14M5 12h14" />,
   refresh: <path d="M21 12a9 9 0 1 1-9-9c2.5 0 4.9 1 6.7 2.7L21 8M21 3v5h-5" />,
