@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
+import type { ExtensionUiRequest, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
+import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
 import { formatTokens } from '../lib/utils';
 import { Icon } from './Icon';
 import { CopyMessageButton, Markdown } from './Markdown';
@@ -170,8 +171,14 @@ function argumentPreview(args: Record<string, unknown>): string {
   return typeof first === 'string' ? first.slice(0, 60) : '';
 }
 
+function isTerminalToolName(name: string): boolean {
+  return /(?:command|terminal|shell|powershell|bash|exec|run)/i.test(name);
+}
+
 function ToolCard({ tool }: { tool: ToolExecution }) {
-  const [expanded, setExpanded] = useState(tool.status === 'pending' || tool.status === 'streaming');
+  const terminalTool = isTerminalToolName(tool.toolName);
+  const command = terminalTool ? argumentPreview(tool.args) : '';
+  const [expanded, setExpanded] = useState(terminalTool || tool.status === 'pending' || tool.status === 'streaming');
   const statusLabel = {
     pending: '等待中',
     streaming: '执行中',
@@ -185,8 +192,8 @@ function ToolCard({ tool }: { tool: ToolExecution }) {
 
   useEffect(() => {
     if (tool.status === 'streaming') setExpanded(true);
-    if (tool.status === 'complete' && !tool.isError) setExpanded(false);
-  }, [tool.isError, tool.status]);
+    if (tool.status === 'complete' && !tool.isError && !terminalTool) setExpanded(false);
+  }, [terminalTool, tool.isError, tool.status]);
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -214,7 +221,7 @@ function ToolCard({ tool }: { tool: ToolExecution }) {
   }, [isEdit, tool.args]);
 
   return (
-    <div className={`tool-card${tool.history ? ' history' : ''}`} data-tool-call-id={tool.toolCallId}>
+    <div className={`tool-card${terminalTool ? ' terminal-tool-card' : ''}${tool.history ? ' history' : ''}`} data-tool-call-id={tool.toolCallId}>
       <div
         className="tool-card-header"
         role="button"
@@ -256,7 +263,10 @@ function ToolCard({ tool }: { tool: ToolExecution }) {
       </div>
       <div className={`tool-card-body${expanded ? ' expanded' : ''}`}>
         {diff}
-        {!isEdit && Object.keys(tool.args).length ? (
+        {terminalTool && command ? (
+          <div className="tool-terminal-command"><span>$</span><code>{command}</code></div>
+        ) : null}
+        {!isEdit && !terminalTool && Object.keys(tool.args).length ? (
           <div className="tool-args">{JSON.stringify(tool.args, null, 2)}</div>
         ) : null}
         <div className="tool-output-wrapper">
@@ -264,6 +274,77 @@ function ToolCard({ tool }: { tool: ToolExecution }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function optionLabel(option: string | { label: string; value: unknown }): string {
+  return typeof option === 'string' ? option : option.label;
+}
+
+function optionValue(option: string | { label: string; value: unknown }): unknown {
+  return typeof option === 'string' ? option : option.value;
+}
+
+function PermissionRequestCard({
+  request,
+  onRespond,
+}: {
+  request: ExtensionUiRequest;
+  onRespond(request: ExtensionUiRequest, response: Record<string, unknown>): void;
+}) {
+  const [responding, setResponding] = useState(false);
+  const { action, detail } = permissionRequestDetails(request);
+  const options = [...(request.options || [])].sort((left, right) => {
+    const leftDenied = optionLabel(left).includes('拒绝');
+    const rightDenied = optionLabel(right).includes('拒绝');
+    return leftDenied === rightDenied ? 0 : leftDenied ? -1 : 1;
+  });
+
+  useEffect(() => setResponding(false), [request.id, request.requestId, request.title]);
+
+  const respond = (option: string | { label: string; value: unknown }) => {
+    if (responding) return;
+    setResponding(true);
+    onRespond(request, { value: optionValue(option) });
+  };
+
+  return (
+    <section className="permission-request-card" role="region" aria-label="Pi 工具执行授权">
+      <div className="permission-request-icon" aria-hidden="true"><Icon name="shield" width={17} height={17} /></div>
+      <div className="permission-request-content">
+        <div className="permission-request-heading">
+          <div>
+            <span className="permission-request-eyebrow">需要你的确认</span>
+            <h3>允许 Pi {action}？</h3>
+          </div>
+          <span className="permission-request-status"><span />等待授权</span>
+        </div>
+        {detail ? <pre className="permission-request-detail"><code>{detail}</code></pre> : null}
+        <p className="permission-request-note">授权仅作用于当前操作；“本会话允许”会在当前项目中放行同类操作。</p>
+        <div className="permission-request-actions">
+          {options.map((option) => {
+            const label = optionLabel(option);
+            const kind = label.includes('拒绝')
+              ? 'deny'
+              : label.includes('本会话')
+                ? 'session'
+                : 'once';
+            const displayLabel = kind === 'session' ? '本会话允许' : label;
+            return (
+              <button
+                className={`permission-request-button ${kind}`}
+                type="button"
+                disabled={responding}
+                key={label}
+                onClick={() => respond(option)}
+              >
+                {displayLabel}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -276,14 +357,18 @@ export function MessageList({
   timeline,
   streaming,
   switching = false,
+  extensionUiRequest,
   onDeleteMessage,
   onEditMessage,
+  onRespondToExtension,
 }: {
   timeline: TimelineItem[];
   streaming: boolean;
   switching?: boolean;
+  extensionUiRequest?: ExtensionUiRequest | null;
   onDeleteMessage?(entryId: string): Promise<boolean>;
   onEditMessage?(message: RenderedMessage): void;
+  onRespondToExtension?(request: ExtensionUiRequest, response: Record<string, unknown>): void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrolledUp, setScrolledUp] = useState(false);
@@ -291,6 +376,8 @@ export function MessageList({
   const previousCount = useRef(timeline.length);
   const previousFingerprint = useRef(timelineFingerprint(timeline));
   const stickToBottom = useRef(true);
+  const permissionRequest = isPermissionRequest(extensionUiRequest) ? extensionUiRequest : null;
+  const permissionRequestKey = permissionRequest?.id || permissionRequest?.requestId || permissionRequest?.title || '';
   const lastUserMessageId = useMemo(
     () => [...timeline].reverse().find((item) => item.kind === 'message' && item.message.role === 'user')?.id,
     [timeline],
@@ -324,6 +411,15 @@ export function MessageList({
     previousFingerprint.current = fingerprint;
   }, [timeline]);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !permissionRequestKey) return;
+    stickToBottom.current = true;
+    setScrolledUp(false);
+    setNewMessage(false);
+    container.scrollTop = container.scrollHeight;
+  }, [permissionRequestKey]);
+
   return (
     <div className={`chat-messages-wrap${switching ? ' is-switching' : ''}`}>
       {switching ? (
@@ -353,6 +449,9 @@ export function MessageList({
             <ToolCard key={item.id} tool={item.tool} />
           ),
         )}
+        {permissionRequest && onRespondToExtension ? (
+          <PermissionRequestCard request={permissionRequest} onRespond={onRespondToExtension} />
+        ) : null}
       </div>
       <button
         className={`scroll-bottom-btn${scrolledUp ? '' : ' hidden'}`}
@@ -371,7 +470,7 @@ export function MessageList({
         <span className={`scroll-bottom-badge${newMessage ? '' : ' hidden'}`}>有新消息</span>
         <span className="scroll-bottom-icon"><Icon name="arrow-down" /></span>
       </button>
-      <div className={`typing-indicator${streaming ? '' : ' hidden'}`} aria-hidden={!streaming} />
+      <div className={`typing-indicator${streaming && !permissionRequest ? '' : ' hidden'}`} aria-hidden={!streaming || Boolean(permissionRequest)} />
     </div>
   );
 }

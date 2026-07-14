@@ -18,6 +18,7 @@ import type {
   SlashCommand,
   ToastMessage,
 } from '../lib/types';
+import { isPermissionRequest } from '../lib/extension-ui';
 import { basename, formatTokens, shortModelName, totalInputTokens, uniqueId } from '../lib/utils';
 import {
   applySlashCompletion,
@@ -646,7 +647,7 @@ export function ExtensionDialog({ request }: { request: ExtensionUiRequest | nul
     window.requestAnimationFrame(() => fieldRef.current?.focus());
     return () => { if (timeout != null) window.clearTimeout(timeout); };
   }, [request]);
-  if (!request) return null;
+  if (!request || isPermissionRequest(request)) return null;
   const cancel = () => controller.respondToExtension(request, { cancelled: true });
   const title = request.title || ({ select: '请选择', confirm: '确认操作', input: '输入内容', editor: '编辑内容', notify: '扩展通知' } as Record<string, string>)[request.method] || '扩展请求';
   return (
@@ -656,7 +657,6 @@ export function ExtensionDialog({ request }: { request: ExtensionUiRequest | nul
         if (event.key === 'Enter' && request.method === 'input') { event.preventDefault(); controller.respondToExtension(request, value.trim() ? { value: value.trim() } : { cancelled: true }); }
       }}>
         <div className="dialog-title">{title}</div>
-        {request.method === 'select' && request.title?.startsWith('Pi 请求权限') ? <div className="dialog-security-note">此授权只影响当前 Pi 会话；可在设置中随时调整默认权限策略。</div> : null}
         {request.message ? <div className="dialog-message">{request.message}</div> : null}
         {request.method === 'select' ? <div className="dialog-options">{(request.options || []).map((option) => <button className="dialog-option" type="button" key={optionLabel(option)} onClick={() => controller.respondToExtension(request, { value: optionValue(option) })}>{optionLabel(option)}</button>)}</div> : null}
         {request.method === 'input' ? <input ref={fieldRef as React.RefObject<HTMLInputElement>} className="dialog-input" type="text" placeholder={String(request.placeholder || '')} value={value} onChange={(event) => setValue(event.target.value)} /> : null}

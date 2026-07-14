@@ -66,7 +66,7 @@ export default function (pi: ExtensionAPI) {
     if (sessionAllowances.has(allowanceKey)) return;
 
     const choice = await ctx.ui.select(
-      `Pi 请求权限\n${actionLabel(event.toolName)} · ${detail(event.toolName, event.input as Record<string, unknown>)}`,
+      `Pi 请求权限\n${actionLabel(event.toolName)}\n${detail(event.toolName, event.input as Record<string, unknown>)}`,
       ['仅允许本次', '本会话允许此类操作', '拒绝'],
       { signal: ctx.signal },
     );

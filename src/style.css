@@ -331,6 +331,7 @@ body.hide-thinking .thinking-block { display: none; }
   animation: messageEnter var(--duration-fast) var(--ease);
 }
 .tool-card:hover { border-color: var(--border-hover); }
+.terminal-tool-card { border-color: color-mix(in srgb, var(--tool-accent) 20%, var(--border)); background: color-mix(in srgb, var(--tool-bg) 82%, var(--bg-panel)); }
 .tool-card-header {
   display: flex;
   min-height: 38px;
@@ -388,8 +389,44 @@ body.hide-thinking .thinking-block { display: none; }
   word-break: break-word;
 }
 .tool-args { border-bottom: 1px solid var(--border); background: var(--bg-glass); color: var(--text-dim); }
+.tool-terminal-command { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 5px; padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--bg-glass); color: var(--accent-text); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tool-terminal-command code { overflow-x: auto; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+.terminal-tool-card .tool-output { max-height: 220px; overflow: auto; }
 .tool-output:empty { display: none; }
 .tool-output-header { padding: 6px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 9px; }
+
+/* Permission requests stay in the conversation instead of blocking the app. */
+.permission-request-card {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 11px;
+  margin: 4px 0;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warning) 6%, var(--bg-panel)), var(--bg-panel) 64%);
+  box-shadow: var(--shadow-sm);
+  animation: messageEnter var(--duration-fast) var(--ease);
+}
+.permission-request-icon { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--warning) 10%, var(--bg-muted)); color: var(--warning); }
+.permission-request-content { min-width: 0; }
+.permission-request-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.permission-request-eyebrow { display: block; margin-bottom: 3px; color: var(--warning); font-size: 9px; font-weight: 720; letter-spacing: .08em; text-transform: uppercase; }
+.permission-request-heading h3 { margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 680; line-height: 1.4; }
+.permission-request-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; margin-top: 1px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 9px; white-space: nowrap; }
+.permission-request-status > span { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 13%, transparent); }
+.permission-request-detail { max-height: 180px; margin: 10px 0 0; padding: 9px 10px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg-solid) 54%, var(--bg-muted)); color: var(--text-secondary); font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.permission-request-detail code { font: inherit; }
+.permission-request-note { margin: 8px 0 0; color: var(--text-dim); font-size: 10px; line-height: 1.5; }
+.permission-request-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; margin-top: 11px; }
+.permission-request-button { min-height: 31px; padding: 0 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-muted); color: var(--text-secondary); font-size: 10px; font-weight: 620; cursor: pointer; transition: border-color var(--duration-fast), background var(--duration-fast), color var(--duration-fast), transform var(--duration-fast); }
+.permission-request-button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--border-hover); background: var(--bg-elevated); color: var(--text-primary); }
+.permission-request-button.once { border-color: var(--accent); background: var(--accent); color: #fff; }
+.permission-request-button.once:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: #fff; }
+.permission-request-button.deny { margin-right: auto; background: transparent; color: var(--text-dim); }
+.permission-request-button.deny:hover:not(:disabled) { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); background: color-mix(in srgb, var(--error) 8%, transparent); color: var(--error); }
+.permission-request-button:disabled { cursor: wait; opacity: .5; }
 
 /* Diff */
 .tool-diff { overflow-x: auto; padding: 7px 0; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
@@ -507,6 +544,12 @@ body.hide-thinking .thinking-block { display: none; }
   .tool-card { width: 100%; }
   .tool-args-preview { max-width: 36vw; }
   .message-image { max-width: min(220px, 72vw); }
+  .permission-request-card { grid-template-columns: 28px minmax(0, 1fr); gap: 9px; padding: 11px; }
+  .permission-request-icon { width: 28px; height: 28px; }
+  .permission-request-heading { gap: 8px; }
+  .permission-request-status { display: none; }
+  .permission-request-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .permission-request-button.deny { grid-column: 1 / -1; grid-row: 2; margin-right: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

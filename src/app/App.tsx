@@ -285,11 +285,13 @@ export function App() {
                 timeline={snapshot.timeline}
                 streaming={snapshot.isStreaming}
                 switching={snapshot.sessionSwitching}
+                extensionUiRequest={snapshot.extensionUiRequest}
                 onDeleteMessage={(entryId) => controller.deleteSessionMessage(entryId)}
                 onEditMessage={(message) => {
                   if (!message.sessionEntryId) return;
                   setEditingMessage({ entryId: message.sessionEntryId, text: message.content, images: message.images });
                 }}
+                onRespondToExtension={(request, response) => controller.respondToExtension(request, response)}
               />
               <Composer
                 snapshot={snapshot}
