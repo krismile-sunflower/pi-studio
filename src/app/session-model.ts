@@ -135,6 +135,7 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
           kind: 'message',
           message: {
             id,
+            sessionEntryId: typeof entry.id === 'string' ? entry.id : undefined,
             role: 'user',
             content: getMessageText(message),
             images,
@@ -154,6 +155,7 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
           kind: 'message',
           message: {
             id,
+            sessionEntryId: typeof entry.id === 'string' ? entry.id : undefined,
             role: error ? 'error' : 'assistant',
             content: error || getMessageText(message),
             thinking: getMessageThinking(message),

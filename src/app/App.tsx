@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyTheme, getCurrentTheme } from '../lib/theme';
-import type { FileAttachment } from '../lib/types';
+import type { FileAttachment, ImageAttachment } from '../lib/types';
 import { controller } from './controller';
 import { useAppSnapshot } from './store';
 import { FileSidebar } from '../components/FileSidebar';
@@ -98,8 +98,13 @@ export function App() {
   );
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
+  const [editingMessage, setEditingMessage] = useState<{ entryId: string; text: string; images?: ImageAttachment[] } | null>(null);
   const sidebarResizer = useRef<HTMLDivElement>(null);
   const fileResizer = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setEditingMessage(null);
+  }, [snapshot.selectedSessionFile]);
 
   usePanelResize(sidebarResizer, {
     cssVariable: '--sidebar-width',
@@ -280,10 +285,17 @@ export function App() {
                 timeline={snapshot.timeline}
                 streaming={snapshot.isStreaming}
                 switching={snapshot.sessionSwitching}
+                onDeleteMessage={(entryId) => controller.deleteSessionMessage(entryId)}
+                onEditMessage={(message) => {
+                  if (!message.sessionEntryId) return;
+                  setEditingMessage({ entryId: message.sessionEntryId, text: message.content, images: message.images });
+                }}
               />
               <Composer
                 snapshot={snapshot}
                 pendingFiles={pendingFiles}
+                editingMessage={editingMessage}
+                onCancelEditing={() => setEditingMessage(null)}
                 onRemoveFile={(path) =>
                   setPendingFiles((current) => current.filter((file) => file.path !== path))
                 }

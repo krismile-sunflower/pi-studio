@@ -60,26 +60,51 @@ function Welcome() {
   );
 }
 
-function ErrorMessage({ content }: { content: string }) {
+function ErrorMessage({ message, onDelete }: { message: RenderedMessage; onDelete?(entryId: string): Promise<boolean> }) {
+  const [deleting, setDeleting] = useState(false);
+  const canDelete = Boolean(onDelete && message.history && message.sessionEntryId);
   return (
     <div className="message assistant assistant-error-message">
       <div className="assistant-error-card" role="alert">
         <span className="assistant-error-icon" aria-hidden="true">!</span>
         <div className="assistant-error-body">
           <strong className="assistant-error-title">操作失败</strong>
-          <p className="assistant-error-summary">{content}</p>
+          <p className="assistant-error-summary">{message.content}</p>
         </div>
       </div>
+      {canDelete ? (
+        <div className="message-actions">
+          <button className="message-delete-btn" type="button" aria-label="删除这条消息" title="删除这条消息" disabled={deleting} onClick={async () => {
+            if (!message.sessionEntryId || !window.confirm('删除这条消息？删除后会同步修改会话上下文。')) return;
+            setDeleting(true);
+            await onDelete?.(message.sessionEntryId);
+            setDeleting(false);
+          }}><Icon name="trash" width={12} height={12} /></button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function MessageItem({ message }: { message: RenderedMessage }) {
+function MessageItem({
+  message,
+  editable,
+  onDelete,
+  onEdit,
+}: {
+  message: RenderedMessage;
+  editable?: boolean;
+  onDelete?(entryId: string): Promise<boolean>;
+  onEdit?(message: RenderedMessage): void;
+}) {
+  const [deleting, setDeleting] = useState(false);
   if (message.role === 'system' && message.content === '__PI_STUDIO_WELCOME__') return <Welcome />;
-  if (message.role === 'error') return <ErrorMessage content={message.content} />;
+  if (message.role === 'error') return <ErrorMessage message={message} onDelete={onDelete} />;
   if (message.role === 'system') return <div className="system-message">{message.content}</div>;
 
   const hasUsage = Boolean(usageText(message.usage));
+  const canDelete = Boolean(onDelete && message.history && message.sessionEntryId && !message.streaming);
+  const canEdit = Boolean(editable && onEdit && message.history && message.sessionEntryId && !message.streaming);
   return (
     <div className={`message ${message.role}${message.history ? ' history' : ''}`} data-message-id={message.id}>
       <div className={`message-content${message.streaming ? ' streaming' : ''}`}>
@@ -104,8 +129,32 @@ function MessageItem({ message }: { message: RenderedMessage }) {
           <span className={message.streaming ? 'streaming-text' : undefined}>{message.content}</span>
         )}
       </div>
-      {message.role === 'assistant' && !message.streaming ? (
-        <CopyMessageButton text={message.content} />
+      {(message.role === 'assistant' && !message.streaming) || canDelete || canEdit ? (
+        <div className="message-actions">
+          {message.role === 'assistant' && !message.streaming ? <CopyMessageButton text={message.content} /> : null}
+          {canEdit ? (
+            <button className="message-edit-btn" type="button" aria-label="重新编辑这条消息" title="重新编辑并发送" onClick={() => onEdit?.(message)}>
+              <Icon name="edit" width={12} height={12} />
+            </button>
+          ) : null}
+          {canDelete ? (
+            <button
+              className="message-delete-btn"
+              type="button"
+              aria-label="删除这条消息"
+              title="删除这条消息"
+              disabled={deleting}
+              onClick={async () => {
+                if (!message.sessionEntryId || !window.confirm('删除这条消息？删除后会同步修改会话上下文。')) return;
+                setDeleting(true);
+                await onDelete?.(message.sessionEntryId);
+                setDeleting(false);
+              }}
+            >
+              <Icon name="trash" width={12} height={12} />
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {hasUsage ? <span className="message-usage">{usageText(message.usage)}</span> : null}
     </div>
@@ -227,10 +276,14 @@ export function MessageList({
   timeline,
   streaming,
   switching = false,
+  onDeleteMessage,
+  onEditMessage,
 }: {
   timeline: TimelineItem[];
   streaming: boolean;
   switching?: boolean;
+  onDeleteMessage?(entryId: string): Promise<boolean>;
+  onEditMessage?(message: RenderedMessage): void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrolledUp, setScrolledUp] = useState(false);
@@ -238,6 +291,10 @@ export function MessageList({
   const previousCount = useRef(timeline.length);
   const previousFingerprint = useRef(timelineFingerprint(timeline));
   const stickToBottom = useRef(true);
+  const lastUserMessageId = useMemo(
+    () => [...timeline].reverse().find((item) => item.kind === 'message' && item.message.role === 'user')?.id,
+    [timeline],
+  );
 
   // Keep scroll stable across session switches / history replace.
   useLayoutEffect(() => {
@@ -291,7 +348,7 @@ export function MessageList({
       >
         {timeline.map((item) =>
           item.kind === 'message' ? (
-            <MessageItem key={item.id} message={item.message} />
+            <MessageItem key={item.id} message={item.message} editable={item.id === lastUserMessageId && !streaming} onDelete={onDeleteMessage} onEdit={onEditMessage} />
           ) : (
             <ToolCard key={item.id} tool={item.tool} />
           ),

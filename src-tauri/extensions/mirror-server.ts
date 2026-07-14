@@ -1306,6 +1306,91 @@ img{border-radius:12px}a{color:#b87a5c;font-size:18px;margin-top:16px}p{color:rg
       return;
     }
 
+    // Delete one message entry and reconnect its children to the previous parent.
+    if (urlPath === "/api/sessions/entry/delete" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => {
+        try {
+          const { filePath, entryId, includeDescendants } = JSON.parse(body);
+          if (!filePath || !entryId || typeof filePath !== "string" || typeof entryId !== "string") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "filePath and entryId are required" }));
+            return;
+          }
+          const resolved = path.resolve(filePath);
+          const root = path.resolve(SESSIONS_DIR);
+          const resolvedForCompare = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+          const rootForCompare = process.platform === "win32" ? root.toLowerCase() : root;
+          if (!resolvedForCompare.startsWith(rootForCompare + path.sep) || !resolved.endsWith(".jsonl")) {
+            throw new Error("Session file is outside the Pi sessions directory");
+          }
+          const entries = fs.readFileSync(resolved, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+          const index = entries.findIndex((entry: any) => entry.id === entryId);
+          if (index < 0) throw new Error("Session entry not found");
+          if (entries[index]?.type !== "message") throw new Error("Only message entries can be deleted");
+          const toolCallIds = new Set(
+            (Array.isArray(entries[index]?.message?.content) ? entries[index].message.content : [])
+              .filter((block: any) => block?.type === "toolCall" && block.id)
+              .map((block: any) => block.id),
+          );
+          const removedIds = new Set<string>([entryId]);
+          if (includeDescendants) {
+            let foundDescendant = true;
+            while (foundDescendant) {
+              foundDescendant = false;
+              for (const entry of entries) {
+                if (entry.id && entry.parentId && removedIds.has(entry.parentId) && !removedIds.has(entry.id)) {
+                  removedIds.add(entry.id);
+                  foundDescendant = true;
+                }
+              }
+            }
+          }
+          for (const entry of entries) {
+            if (entry?.message?.role === "toolResult" && toolCallIds.has(entry.message.toolCallId) && entry.id) {
+              removedIds.add(entry.id);
+            }
+          }
+          let foundReference = true;
+          while (foundReference) {
+            foundReference = false;
+            for (const entry of entries) {
+              if (entry.id && entry.targetId && removedIds.has(entry.targetId) && !removedIds.has(entry.id)) {
+                removedIds.add(entry.id);
+                foundReference = true;
+              }
+            }
+          }
+          const removedParents = new Map<string, string | null>();
+          for (const entry of entries) {
+            if (entry.id && removedIds.has(entry.id)) removedParents.set(entry.id, entry.parentId ?? null);
+          }
+          let cleaned = entries.filter((entry: any) => !entry.id || !removedIds.has(entry.id));
+          for (const entry of cleaned) {
+            const visited = new Set<string>();
+            while (entry.parentId && removedParents.has(entry.parentId) && !visited.has(entry.parentId)) {
+              visited.add(entry.parentId);
+              entry.parentId = removedParents.get(entry.parentId) ?? null;
+            }
+          }
+          const hasVisibleMessages = cleaned.some((entry: any) => entry.type === "message" && ["user", "assistant"].includes(entry?.message?.role));
+          if (!hasVisibleMessages) {
+            cleaned = cleaned.filter((entry: any) => entry.type === "session");
+          }
+          const tempPath = `${resolved}.tmp`;
+          fs.writeFileSync(tempPath, `${cleaned.map((entry: any) => JSON.stringify(entry)).join("\n")}\n`);
+          fs.renameSync(tempPath, resolved);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, entries: cleaned }));
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
     // Session delete
     if (urlPath === "/api/sessions/delete" && req.method === "POST") {
       let body = "";

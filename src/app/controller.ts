@@ -420,6 +420,7 @@ export class PiStudioController {
       return;
     }
 
+    this.removeWelcome();
     this.appendMessage('user', prompt, { images });
     this.pendingPrompts.push({ message: prompt, createdAt: Date.now(), confirmed: false });
     try {
@@ -448,6 +449,55 @@ export class PiStudioController {
   async exportHtml(): Promise<void> {
     const result = await this.rpcCommand<{ path?: string }>({ type: 'export_html' }, '正在导出会话…');
     if (result.success && result.data?.path) notify('会话已导出', result.data.path, 'success');
+  }
+
+  async deleteSessionMessage(entryId: string): Promise<boolean> {
+    const state = appStore.getSnapshot();
+    const filePath = state.selectedSessionFile || state.activeSessionFile;
+    if (!filePath || !entryId || state.isStreaming) return false;
+    try {
+      const result = await postJson<{ ok?: boolean; entries?: SessionEntry[] }>(
+        '/api/sessions/entry/delete',
+        { filePath, entryId, includeDescendants: false },
+      );
+      if (!result.ok) throw new Error('会话消息删除失败');
+      this.applyHistory(result.entries || [], { allowEmptyWelcome: true });
+      try {
+        await this.resumeSession(filePath, { keepExistingHistory: false });
+      } catch {
+        // The file is already updated; a later session sync/restart will reload it.
+      }
+      this.refreshSessionsSoon(200);
+      notify('消息已删除', '会话上下文已重新连接。', 'success');
+      return true;
+    } catch (error) {
+      notify('删除消息失败', String(error), 'error');
+      return false;
+    }
+  }
+
+  async resendLastUserMessage(
+    entryId: string,
+    message: string,
+    images: ImageAttachment[] = [],
+  ): Promise<boolean> {
+    const state = appStore.getSnapshot();
+    const filePath = state.selectedSessionFile || state.activeSessionFile;
+    if (!filePath || !entryId || !message.trim() || state.isStreaming) return false;
+    try {
+      const result = await postJson<{ ok?: boolean; entries?: SessionEntry[] }>(
+        '/api/sessions/entry/delete',
+        { filePath, entryId, includeDescendants: true },
+      );
+      if (!result.ok) throw new Error('无法回退到上一轮会话');
+      this.applyHistory(result.entries || [], { allowEmptyWelcome: true });
+      await this.resumeSession(filePath, { keepExistingHistory: false });
+      await this.sendMessage(message, images);
+      return true;
+    } catch (error) {
+      notify('重新发送失败', String(error), 'error');
+      return false;
+    }
   }
 
   async showSessionStats(): Promise<void> {
@@ -1150,6 +1200,7 @@ export class PiStudioController {
       case 'agent_end':
         this.finishStreaming();
         appStore.update({ isStreaming: false });
+        void this.syncCurrentHistory();
         void this.flushQueue();
         break;
       case 'message_start':
@@ -1224,6 +1275,21 @@ export class PiStudioController {
           ? { ...prompt, confirmed: true }
           : prompt,
       );
+    }
+  }
+
+  private async syncCurrentHistory(): Promise<void> {
+    if (this.isMirrorMode) {
+      this.transport.send({ type: 'mirror_sync_request' });
+      return;
+    }
+    const result = await this.rpcCommand<{ entries?: SessionEntry[] }>(
+      { type: 'get_entries' },
+      '',
+      true,
+    );
+    if (result.success) {
+      this.applyHistory(result.data?.entries || [], { allowEmptyWelcome: true });
     }
   }
 
@@ -1358,6 +1424,24 @@ export class PiStudioController {
     if (!hasPending && entries.length > 0) {
       const next = buildHistoryTimeline(entries);
       const current = appStore.getSnapshot().timeline;
+      if (next.timeline.length === 0 && !state.isStreaming) {
+        const alreadyShowingWelcome = current.some(
+          (item) => item.kind === 'message' && item.message.content === '__PI_STUDIO_WELCOME__',
+        );
+        if (alreadyShowingWelcome) {
+          if (state.sessionSwitching) appStore.update({ sessionSwitching: false });
+        } else {
+          appStore.update({
+            timeline: [],
+            sessionTotalCost: 0,
+            lastUsage: null,
+            sessionSwitching: false,
+          });
+          this.addWelcome();
+        }
+        this.refreshSessionsSoon(300);
+        return;
+      }
       const sameLength = current.length === next.timeline.length;
       const sameTail =
         sameLength &&
@@ -1684,6 +1768,14 @@ export class PiStudioController {
 
   private addWelcome(): void {
     if (appStore.getSnapshot().timeline.length === 0) this.appendWelcome();
+  }
+
+  private removeWelcome(): void {
+    appStore.update((state) => ({
+      timeline: state.timeline.filter(
+        (item) => item.kind !== 'message' || item.message.content !== '__PI_STUDIO_WELCOME__',
+      ),
+    }));
   }
 
   private resetConversationWithWelcome(): void {

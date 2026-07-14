@@ -12,6 +12,7 @@ export type IconName =
   | 'close'
   | 'copy'
   | 'download'
+  | 'edit'
   | 'external'
   | 'file'
   | 'folder'
@@ -25,7 +26,8 @@ export type IconName =
   | 'search'
   | 'send'
   | 'settings'
-  | 'stop';
+  | 'stop'
+  | 'trash';
 
 const paths: Record<IconName, React.ReactNode> = {
   'arrow-left': <path d="m15 18-6-6 6-6" />,
@@ -49,6 +51,7 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   download: <path d="M12 3v12m-5-5 5 5 5-5M5 21h14" />,
+  edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
   external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
   file: <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6" />,
   folder: <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
@@ -86,6 +89,7 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   stop: <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none" />,
+  trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>,
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

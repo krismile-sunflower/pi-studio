@@ -9,7 +9,8 @@ use crate::commands::files::{
     canonical_workspace_path, list_files_inner, open_in_vscode, open_path, read_file_content,
 };
 use crate::commands::sessions::{
-    delete_session, empty_sessions, live_tau_instances, search_sessions, session_file,
+    delete_session, delete_session_entry, empty_sessions, live_tau_instances, search_sessions,
+    session_file,
 };
 use crate::commands::sidecar::{
     active_instance_for_port, desktop_transport, is_compatible_tau_port, is_managed_instance,
@@ -107,6 +108,7 @@ fn is_desktop_local_path(path: &str) -> bool {
     ) || path == "/api/search"
         || path == "/api/sessions"
         || path == "/api/sessions/delete"
+        || path == "/api/sessions/entry/delete"
         || path.starts_with("/api/sessions/")
 }
 
@@ -382,6 +384,26 @@ async fn local_response(
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| "Missing session file path".to_string())?;
             delete_session(file_path)?
+        }
+        ("POST", "/api/sessions/entry/delete") => {
+            let body = request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .unwrap_or_default();
+            let file_path = body
+                .get("filePath")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "Missing session file path".to_string())?;
+            let entry_id = body
+                .get("entryId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "Missing session entry id".to_string())?;
+            let include_descendants = body
+                .get("includeDescendants")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            delete_session_entry(file_path, entry_id, include_descendants)?
         }
         _ => {
             let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();

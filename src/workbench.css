@@ -1378,6 +1378,10 @@ div.project-header:hover { background: transparent; color: var(--text-secondary)
   border-color: rgba(109, 124, 255, .55);
   box-shadow: 0 0 0 3px var(--accent-subtle), var(--shadow-md);
 }
+.composer-editing-banner { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border-bottom: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); background: var(--accent-subtle); color: var(--accent-text); font-size: 10px; }
+.composer-editing-banner span { display: inline-flex; align-items: center; gap: 6px; }
+.composer-editing-banner button { padding: 3px 7px; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); font-size: 10px; cursor: pointer; }
+.composer-editing-banner button:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
 #chat-form { display: block; width: 100%; }
 .input-bubble { display: block; }
 #message-input { display: block; width: 100%; min-height: 48px; max-height: 132px; padding: 12px 14px 5px; overflow-y: auto; resize: none; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--text-primary); font-size: 14px; line-height: 1.5; outline: 0; }

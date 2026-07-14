@@ -222,11 +222,13 @@ async function processImage(file: File): Promise<ImageAttachment> {
 interface ComposerProps {
   snapshot: AppSnapshot;
   pendingFiles: FileAttachment[];
+  editingMessage: { entryId: string; text: string; images?: ImageAttachment[] } | null;
   onRemoveFile(path: string): void;
+  onCancelEditing(): void;
   onOpenCommands(): void;
 }
 
-export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands }: ComposerProps) {
+export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile, onCancelEditing, onOpenCommands }: ComposerProps) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [recording, setRecording] = useState(false);
@@ -314,6 +316,17 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
     textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
   }, [text]);
 
+  useEffect(() => {
+    if (!editingMessage) return;
+    setText(editingMessage.text);
+    setImages(editingMessage.images || []);
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      textarea?.focus();
+      textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+  }, [editingMessage]);
+
   const addFiles = async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith('image/')) continue;
@@ -348,11 +361,17 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
     if (!text.trim() && images.length === 0) return;
     const message = text;
     const attachments = images;
+    if (editingMessage) {
+      const sent = await controller.resendLastUserMessage(editingMessage.entryId, message, attachments);
+      if (!sent) return;
+      onCancelEditing();
+    } else {
+      await controller.sendMessage(message, attachments);
+    }
     setText('');
     setImages([]);
     setSlashOpen(false);
     pendingFiles.forEach((file) => onRemoveFile(file.path));
-    await controller.sendMessage(message, attachments);
   };
 
   const removeFile = (file: FileAttachment) => {
@@ -403,6 +422,12 @@ export function Composer({ snapshot, pendingFiles, onRemoveFile, onOpenCommands 
     <div className="input-area">
       <div className="mobile-model-bar" />
       <div className="composer-shell">
+        {editingMessage ? (
+          <div className="composer-editing-banner">
+            <span><Icon name="edit" width={13} height={13} /> 正在重新编辑最后一条消息</span>
+            <button type="button" onClick={() => { setText(''); setImages([]); onCancelEditing(); }}>取消</button>
+          </div>
+        ) : null}
         {snapshot.queue.length ? (
           <div className="queued-messages">
             {snapshot.queue.map((item) => <div className="queued-msg" key={item.id}><span className="queued-msg-label">排队中</span><span className="queued-msg-text">{item.message}</span><button className="queued-msg-cancel" type="button" title="取消排队" onClick={() => controller.cancelQueuedMessage(item.id)}>×</button></div>)}

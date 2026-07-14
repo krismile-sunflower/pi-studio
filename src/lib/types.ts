@@ -78,6 +78,7 @@ export interface SessionEntry {
 
 export interface RenderedMessage {
   id: string;
+  sessionEntryId?: string;
   role: 'user' | 'assistant' | 'system' | 'error';
   content: string;
   thinking?: string;

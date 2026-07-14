@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -76,6 +77,172 @@ pub fn session_file(dir_name: &str, file: &str) -> Result<Value, String> {
 pub fn delete_session(file_path: &str) -> Result<Value, String> {
     fs::remove_file(file_path).map_err(|err| err.to_string())?;
     Ok(json!({ "ok": true }))
+}
+
+pub fn delete_session_entry(
+    file_path: &str,
+    entry_id: &str,
+    include_descendants: bool,
+) -> Result<Value, String> {
+    let entry_id = entry_id.trim();
+    if entry_id.is_empty() {
+        return Err("Missing session entry id".to_string());
+    }
+    let path = PathBuf::from(file_path)
+        .canonicalize()
+        .map_err(|err| format!("Could not resolve session file: {err}"))?;
+    let root = sessions_dir()
+        .ok_or_else(|| "Could not resolve Pi sessions directory".to_string())?
+        .canonicalize()
+        .map_err(|err| format!("Could not resolve Pi sessions directory: {err}"))?;
+    if !path.starts_with(&root) || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+        return Err("Session file is outside the Pi sessions directory".to_string());
+    }
+
+    let raw = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let mut entries = raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str::<Value>(line)
+                .map_err(|err| format!("Invalid JSONL at line {}: {err}", index + 1))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries = remove_message_entry(entries, entry_id, include_descendants)?;
+
+    let mut output = String::new();
+    for entry in &entries {
+        output.push_str(&serde_json::to_string(entry).map_err(|err| err.to_string())?);
+        output.push('\n');
+    }
+    let temp_path = path.with_extension("jsonl.tmp");
+    fs::write(&temp_path, output).map_err(|err| err.to_string())?;
+    fs::rename(&temp_path, &path).map_err(|err| {
+        let _ = fs::remove_file(&temp_path);
+        err.to_string()
+    })?;
+
+    Ok(json!({ "ok": true, "entries": entries }))
+}
+
+fn remove_message_entry(
+    mut entries: Vec<Value>,
+    entry_id: &str,
+    include_descendants: bool,
+) -> Result<Vec<Value>, String> {
+    let target_index = entries
+        .iter()
+        .position(|entry| entry.get("id").and_then(Value::as_str) == Some(entry_id))
+        .ok_or_else(|| "Session entry not found".to_string())?;
+    if entries[target_index].get("type").and_then(Value::as_str) != Some("message") {
+        return Err("Only message entries can be deleted".to_string());
+    }
+
+    let tool_call_ids = entries[target_index]
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("toolCall"))
+        .filter_map(|block| block.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<HashSet<_>>();
+
+    let mut removed_ids = HashSet::from([entry_id.to_string()]);
+    if include_descendants {
+        loop {
+            let descendants = entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("parentId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|parent| removed_ids.contains(parent))
+                })
+                .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
+                .filter(|id| !removed_ids.contains(id))
+                .collect::<Vec<_>>();
+            if descendants.is_empty() {
+                break;
+            }
+            removed_ids.extend(descendants);
+        }
+    }
+    for entry in &entries {
+        let is_related_tool_result = entry.pointer("/message/role").and_then(Value::as_str)
+            == Some("toolResult")
+            && entry
+                .pointer("/message/toolCallId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| tool_call_ids.contains(id));
+        if is_related_tool_result {
+            if let Some(id) = entry.get("id").and_then(Value::as_str) {
+                removed_ids.insert(id.to_string());
+            }
+        }
+    }
+    loop {
+        let referenced = entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|target| removed_ids.contains(target))
+            })
+            .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
+            .filter(|id| !removed_ids.contains(id))
+            .collect::<Vec<_>>();
+        if referenced.is_empty() {
+            break;
+        }
+        removed_ids.extend(referenced);
+    }
+
+    let removed_parents = entries
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?;
+            removed_ids
+                .contains(id)
+                .then(|| (id.to_string(), entry.get("parentId").cloned().unwrap_or(Value::Null)))
+        })
+        .collect::<HashMap<_, _>>();
+    entries.retain(|entry| {
+        entry
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or(true, |id| !removed_ids.contains(id))
+    });
+    for entry in &mut entries {
+        let mut parent_id = entry.get("parentId").cloned().unwrap_or(Value::Null);
+        let mut visited = HashSet::new();
+        while let Some(parent) = parent_id.as_str() {
+            if !visited.insert(parent.to_string()) {
+                break;
+            }
+            let Some(replacement) = removed_parents.get(parent) else {
+                break;
+            };
+            parent_id = replacement.clone();
+        }
+        if let Some(object) = entry.as_object_mut() {
+            object.insert("parentId".into(), parent_id);
+        }
+    }
+
+    let has_visible_messages = entries.iter().any(|entry| {
+        entry.get("type").and_then(Value::as_str) == Some("message")
+            && matches!(
+                entry.pointer("/message/role").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+    });
+    if !has_visible_messages {
+        entries.retain(|entry| entry.get("type").and_then(Value::as_str) == Some("session"));
+    }
+
+    Ok(entries)
 }
 
 fn sessions_list() -> Result<Value, String> {
@@ -489,4 +656,70 @@ fn encode_project_dir(path: &str) -> String {
         path.trim_start_matches(['/', '\\'])
             .replace(['/', '\\', ':'], "-")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleting_a_message_reconnects_its_child_to_the_previous_parent() {
+        let entries = vec![
+            json!({ "type": "model_change", "id": "root", "parentId": null }),
+            json!({ "type": "message", "id": "user", "parentId": "root", "message": { "role": "user", "content": "hello" } }),
+            json!({ "type": "message", "id": "assistant", "parentId": "user", "message": { "role": "assistant", "content": "hi" } }),
+        ];
+
+        let result = remove_message_entry(entries, "user", false).expect("message is removable");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1]["id"], "assistant");
+        assert_eq!(result[1]["parentId"], "root");
+    }
+
+    #[test]
+    fn deleting_the_last_visible_message_removes_conversation_metadata() {
+        let entries = vec![
+            json!({ "type": "session", "id": "session" }),
+            json!({ "type": "model_change", "id": "model", "parentId": null }),
+            json!({ "type": "thinking_level_change", "id": "thinking", "parentId": "model" }),
+            json!({ "type": "message", "id": "user", "parentId": "thinking", "message": { "role": "user", "content": "hello" } }),
+        ];
+
+        let result = remove_message_entry(entries, "user", false).expect("message is removable");
+
+        assert_eq!(result, vec![json!({ "type": "session", "id": "session", "parentId": null })]);
+    }
+
+    #[test]
+    fn deleting_an_assistant_tool_call_removes_its_tool_result() {
+        let entries = vec![
+            json!({ "type": "session", "id": "session" }),
+            json!({ "type": "message", "id": "user", "parentId": null, "message": { "role": "user", "content": "read" } }),
+            json!({ "type": "message", "id": "assistant", "parentId": "user", "message": { "role": "assistant", "content": [{ "type": "toolCall", "id": "tool-1", "name": "read" }] } }),
+            json!({ "type": "message", "id": "result", "parentId": "assistant", "message": { "role": "toolResult", "toolCallId": "tool-1", "content": "ok" } }),
+            json!({ "type": "message", "id": "final", "parentId": "result", "message": { "role": "assistant", "content": "done" } }),
+        ];
+
+        let result = remove_message_entry(entries, "assistant", false).expect("message is removable");
+
+        assert!(result.iter().all(|entry| entry["id"] != "result"));
+        assert_eq!(result.last().and_then(|entry| entry["parentId"].as_str()), Some("user"));
+    }
+
+    #[test]
+    fn rewinding_a_user_message_removes_its_reply_branch() {
+        let entries = vec![
+            json!({ "type": "session", "id": "session" }),
+            json!({ "type": "message", "id": "first", "parentId": null, "message": { "role": "user", "content": "first" } }),
+            json!({ "type": "message", "id": "reply", "parentId": "first", "message": { "role": "assistant", "content": "reply" } }),
+            json!({ "type": "message", "id": "last", "parentId": "reply", "message": { "role": "user", "content": "old" } }),
+            json!({ "type": "message", "id": "old-reply", "parentId": "last", "message": { "role": "assistant", "content": "old reply" } }),
+        ];
+
+        let result = remove_message_entry(entries, "last", true).expect("branch is removable");
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.last().and_then(|entry| entry["id"].as_str()), Some("reply"));
+    }
 }

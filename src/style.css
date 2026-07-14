@@ -461,6 +461,9 @@ body.hide-thinking .thinking-block { display: none; }
 @keyframes contentSpin { to { transform: rotate(360deg); } }
 
 /* Message copy control — always visible at low contrast, stronger on hover */
+.message-actions { display: inline-flex; align-items: center; gap: 2px; margin-top: 1px; opacity: 0; pointer-events: none; transition: opacity var(--duration-fast); }
+.message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; pointer-events: auto; }
+.message.user .message-actions { align-self: flex-end; }
 .message-copy-btn {
   display: inline-flex;
   width: 24px;
@@ -472,13 +475,18 @@ body.hide-thinking .thinking-block { display: none; }
   border-radius: 5px;
   background: transparent;
   color: var(--text-dim);
-  opacity: .55;
+  opacity: 1;
   cursor: pointer;
   transition: opacity var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
-.message:hover .message-copy-btn, .message-copy-btn:focus-visible { opacity: 1; color: var(--text-secondary); }
+.message:hover .message-copy-btn, .message-copy-btn:focus-visible { color: var(--text-secondary); }
 .message-copy-btn:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
 .message-copy-btn.copied { color: var(--success); opacity: 1; }
+.message-delete-btn { display: inline-flex; width: 24px; height: 22px; align-items: center; justify-content: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-dim); cursor: pointer; transition: color var(--duration-fast), background var(--duration-fast); }
+.message-edit-btn { display: inline-flex; width: 24px; height: 22px; align-items: center; justify-content: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-dim); cursor: pointer; transition: color var(--duration-fast), background var(--duration-fast); }
+.message-edit-btn:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
+.message-delete-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 10%, transparent); color: var(--error); }
+.message-delete-btn:disabled { opacity: .35; cursor: wait; }
 
 /* KaTeX */
 .math-display, .katex-display {
@@ -494,7 +502,7 @@ body.hide-thinking .thinking-block { display: none; }
 @media (max-width: 720px) {
   .message.user { max-width: 88%; }
   .message.assistant { width: 100%; }
-  .message-copy-btn { opacity: .7; }
+  .message-actions { opacity: .7; pointer-events: auto; }
   .tool-action-btn { opacity: .7; }
   .tool-card { width: 100%; }
   .tool-args-preview { max-width: 36vw; }
