@@ -71,9 +71,13 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
     return () => window.removeEventListener('pi-studio:open-model-picker', openPicker);
   }, []);
 
+  const currentProvider = snapshot.currentModelProvider && snapshot.currentModelProvider !== 'unknown'
+    ? snapshot.currentModelProvider
+    : snapshot.defaultProvider;
   const models = snapshot.models.filter((model) => {
     const query = modelQuery.trim().toLowerCase();
-    return !query || `${model.id} ${model.provider || ''}`.toLowerCase().includes(query);
+    if (!currentProvider || model.provider !== currentProvider) return false;
+    return !query || `${model.id} ${model.name || ''}`.toLowerCase().includes(query);
   });
   const usage = snapshot.lastUsage;
   const used = totalInputTokens(usage);
@@ -123,14 +127,28 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
           </button>
           {modelsOpen ? (
             <div className="model-dropdown-menu" role="listbox" aria-label="选择模型">
-              <input className="model-dropdown-search" type="search" aria-label="搜索模型" placeholder="搜索模型…" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} autoFocus />
+              <div className="model-dropdown-head">
+                <span>选择模型</span>
+                <span className="model-dropdown-provider">{currentProvider || '未选择供应商'}</span>
+              </div>
+              <input className="model-dropdown-search" type="search" aria-label="搜索模型" placeholder={currentProvider ? `在 ${currentProvider} 中搜索…` : '搜索模型…'} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} autoFocus />
               <div className="model-dropdown-items">
-                {models.length ? models.map((model) => (
-                  <button className={`model-dropdown-item${model.id === snapshot.currentModelId ? ' active' : ''}`} type="button" role="option" aria-selected={model.id === snapshot.currentModelId} title={[model.id, model.provider].filter(Boolean).join(' · ')} key={`${model.provider || ''}:${model.id}`} onClick={() => void selectModel(model)}>
-                    <span className="model-dropdown-item-main"><span className="model-dropdown-item-name">{shortModelName(model.id)}</span>{model.provider ? <span className="model-dropdown-item-provider">{model.provider}</span> : null}</span>
-                    <span className="model-dropdown-item-ctx">{model.contextWindow || model.context_window ? `${Math.round((model.contextWindow || model.context_window || 0) / 1000)}k` : ''}</span>
-                  </button>
-                )) : <div className="model-dropdown-item empty">没有可用模型</div>}
+                {models.length ? models.map((model) => {
+                  const active = model.id === snapshot.currentModelId && model.provider === currentProvider;
+                  const context = model.contextWindow || model.context_window || 0;
+                  return (
+                    <button className={`model-dropdown-item${active ? ' active' : ''}`} type="button" role="option" aria-selected={active} title={model.id} key={`${model.provider || ''}:${model.id}`} onClick={() => void selectModel(model)}>
+                      <span className="model-dropdown-item-main">
+                        <span className="model-dropdown-item-name">{shortModelName(model.id)}</span>
+                        {model.name && model.name !== model.id ? <span className="model-dropdown-item-detail">{model.name}</span> : null}
+                      </span>
+                      <span className="model-dropdown-item-meta">
+                        {context ? <span className="model-dropdown-item-ctx">{Math.round(context / 1000)}k</span> : null}
+                        {active ? <Icon name="check" width={13} height={13} /> : null}
+                      </span>
+                    </button>
+                  );
+                }) : <div className="model-dropdown-item empty">当前供应商没有可用模型</div>}
               </div>
             </div>
           ) : null}

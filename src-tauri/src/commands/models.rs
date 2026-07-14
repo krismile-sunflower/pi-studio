@@ -23,6 +23,21 @@ pub struct ModelsConfigResponse {
     pub config: Value,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiModelDefaultsResponse {
+    pub path: String,
+    pub default_provider: Option<String>,
+    pub default_model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPiModelDefaultsRequest {
+    pub provider: String,
+    pub model_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveModelsConfigRequest {
@@ -99,6 +114,56 @@ pub async fn get_models_config() -> Result<ModelsConfigResponse, String> {
         exists: true,
         config,
     })
+}
+
+#[tauri::command]
+pub async fn get_pi_model_defaults() -> Result<PiModelDefaultsResponse, String> {
+    read_pi_model_defaults()
+}
+
+#[tauri::command]
+pub async fn set_pi_model_defaults(
+    request: SetPiModelDefaultsRequest,
+) -> Result<PiModelDefaultsResponse, String> {
+    let provider = request.provider.trim();
+    let model_id = request.model_id.trim();
+    if provider.is_empty() || model_id.is_empty() {
+        return Err("Provider and model are required".to_string());
+    }
+
+    let path = settings_json_path()?;
+    let mut settings = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|err| format!("Failed to read settings.json at {}: {err}", path.display()))?;
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|err| format!("Failed to parse settings.json at {}: {err}", path.display()))?
+    } else {
+        json!({})
+    };
+    let object = settings
+        .as_object_mut()
+        .ok_or_else(|| "settings.json root must be an object".to_string())?;
+    object.insert(
+        "defaultProvider".into(),
+        Value::String(provider.to_string()),
+    );
+    object.insert("defaultModel".into(), Value::String(model_id.to_string()));
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let pretty = serde_json::to_string_pretty(&settings).map_err(|err| err.to_string())?;
+    let temp_path = path.with_extension("json.tmp");
+    fs::write(&temp_path, format!("{pretty}\n")).map_err(|err| err.to_string())?;
+    fs::rename(&temp_path, &path).map_err(|err| {
+        let _ = fs::remove_file(&temp_path);
+        format!(
+            "Failed to replace settings.json at {}: {err}",
+            path.display()
+        )
+    })?;
+
+    read_pi_model_defaults()
 }
 
 #[tauri::command]
@@ -350,6 +415,33 @@ fn models_json_path() -> Result<PathBuf, String> {
     Ok(agent_dir()?.join("models.json"))
 }
 
+fn settings_json_path() -> Result<PathBuf, String> {
+    Ok(agent_dir()?.join("settings.json"))
+}
+
+fn read_pi_model_defaults() -> Result<PiModelDefaultsResponse, String> {
+    let path = settings_json_path()?;
+    let settings = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|err| format!("Failed to read settings.json at {}: {err}", path.display()))?;
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|err| format!("Failed to parse settings.json at {}: {err}", path.display()))?
+    } else {
+        json!({})
+    };
+    Ok(PiModelDefaultsResponse {
+        path: path.display().to_string(),
+        default_provider: settings
+            .get("defaultProvider")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        default_model: settings
+            .get("defaultModel")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 pub fn agent_dir() -> Result<PathBuf, String> {
     env::var("PI_CODING_AGENT_DIR")
         .ok()
@@ -465,6 +557,12 @@ fn validate_provider(provider_name: &str, provider_value: &mut Value) -> Result<
             }
             if cleaned.get("contextWindow").and_then(Value::as_i64) == Some(0) {
                 cleaned.as_object_mut().expect("model is an object").remove("contextWindow");
+            }
+            if let Some(input) = cleaned.get_mut("input").and_then(Value::as_array_mut) {
+                input.retain(|item| matches!(item.as_str(), Some("text" | "image")));
+                if input.is_empty() {
+                    input.push(Value::String("text".into()));
+                }
             }
             if let (Some(profile_id), Some(all_profiles)) = (
                 model.get("reasoningProfile").and_then(Value::as_str),
@@ -776,7 +874,15 @@ async fn fetch_public_model_catalog(client: &reqwest::Client) -> Vec<FetchedMode
                 input: model
                     .pointer("/modalities/input")
                     .and_then(Value::as_array)
-                    .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()),
+                    .map(|items| {
+                        let supported: Vec<String> = items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter(|item| matches!(*item, "text" | "image"))
+                            .map(str::to_string)
+                            .collect();
+                        if supported.is_empty() { vec!["text".into()] } else { supported }
+                    }),
                 reasoning: model.get("reasoning").and_then(Value::as_bool),
             })
         })
@@ -812,6 +918,28 @@ mod tests {
         });
         let result = normalize_and_validate_config(config).expect("valid");
         assert!(result["providers"]["ollama"]["models"][0]["id"] == "llama3.1:8b");
+    }
+
+    #[test]
+    fn removes_input_modalities_not_supported_by_pi() {
+        let config = json!({
+            "providers": {
+                "custom": {
+                    "baseUrl": "https://example.com/v1",
+                    "api": "openai-completions",
+                    "models": [{
+                        "id": "multimodal",
+                        "input": ["text", "image", "video", "pdf"]
+                    }]
+                }
+            }
+        });
+
+        let result = normalize_and_validate_config(config).expect("valid after normalization");
+        assert_eq!(
+            result["providers"]["custom"]["models"][0]["input"],
+            json!(["text", "image"])
+        );
     }
 
     #[test]

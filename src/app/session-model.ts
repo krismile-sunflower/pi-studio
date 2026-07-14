@@ -32,11 +32,28 @@ export function resolveModel(value: unknown, models: ModelInfo[]): ModelInfo | n
   if (value && typeof value === 'object') {
     const candidate = value as ModelInfo;
     if (candidate.id || candidate.modelId || candidate.name) {
-      return { ...candidate, id: candidate.id || candidate.modelId || candidate.name || '' };
+      const id = candidate.id || candidate.modelId || candidate.name || '';
+      const provider = normalizedModelPart(candidate.provider);
+      const matched = models.find((model) =>
+        (model.id === id || model.modelId === id) && (!provider || model.provider === provider),
+      ) || models.find((model) => model.id === id || model.modelId === id);
+      return {
+        ...matched,
+        ...candidate,
+        id,
+        provider: provider || matched?.provider,
+      };
     }
   }
   const id = modelIdFromValue(value);
   return models.find((model) => model.id === id || model.modelId === id) || (id ? { id } : null);
+}
+
+function normalizedModelPart(value?: string): string {
+  const normalized = String(value || '').trim();
+  return normalized && !['unknown', 'undefined', 'null'].includes(normalized.toLowerCase())
+    ? normalized
+    : '';
 }
 
 export function assistantError(message?: PiMessage | null): string | null {

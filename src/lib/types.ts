@@ -327,6 +327,12 @@ export interface ModelsConfigResponse {
   config: ModelsConfig;
 }
 
+export interface PiModelDefaultsResponse {
+  path: string;
+  defaultProvider?: string;
+  defaultModel?: string;
+}
+
 
 export interface ToastMessage {
   id: string;
@@ -415,6 +421,7 @@ export interface AppSnapshot {
   liveInstances: PiInstance[];
   models: ModelInfo[];
   currentModelId: string;
+  currentModelProvider: string;
   thinkingLevel: ThinkingLevel;
   thinkingSupported: boolean;
   contextWindowSize: number;
@@ -424,6 +431,9 @@ export interface AppSnapshot {
   slashCommands: SlashCommand[];
   modelsConfig: ModelsConfig | null;
   modelsConfigPath: string;
+  piSettingsPath: string;
+  defaultProvider: string;
+  defaultModel: string;
   modelsConfigLoading: boolean;
   modelsConfigSaving: boolean;
   modelsConfigError: string;

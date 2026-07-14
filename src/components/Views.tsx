@@ -69,6 +69,11 @@ function maskApiKey(value?: string): string {
   return `${value.slice(0, 3)}••••${value.slice(-4)}`;
 }
 
+function knownModelSetting(value?: string): string {
+  const normalized = String(value || '').trim();
+  return normalized && !['unknown', 'undefined', 'null'].includes(normalized.toLowerCase()) ? normalized : '';
+}
+
 export function ProjectsView({ snapshot }: { snapshot: AppSnapshot }) {
   const [query, setQuery] = useState('');
   const projects = useMemo(() => {
@@ -434,6 +439,37 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
     () => Object.entries(draft.providers || {}).sort(([left], [right]) => left.localeCompare(right)),
     [draft.providers],
   );
+  const currentModelId = knownModelSetting(snapshot.currentModelId) || snapshot.defaultModel;
+  const storedCurrentProvider = knownModelSetting(snapshot.currentModelProvider);
+  const currentModel = snapshot.models.find((model) => model.id === currentModelId && (!storedCurrentProvider || model.provider === storedCurrentProvider));
+  const currentProvider = storedCurrentProvider || currentModel?.provider || snapshot.defaultProvider;
+  const selectedProvider = snapshot.defaultProvider || currentProvider;
+  const selectedProviderModels = useMemo(() => {
+    const result = new Map<string, { id: string; name?: string }>();
+    for (const model of snapshot.models.filter((item) => item.provider === selectedProvider)) {
+      result.set(model.id, { id: model.id, name: model.name });
+    }
+    for (const model of draft.providers?.[selectedProvider]?.models || []) {
+      if (model.id && !result.has(model.id)) result.set(model.id, { id: model.id, name: model.name });
+    }
+    return [...result.values()];
+  }, [draft.providers, selectedProvider, snapshot.models]);
+
+  const switchProvider = async (providerName: string) => {
+    if (!providerName) return;
+    const available = snapshot.models.find((model) => model.provider === providerName);
+    const configured = draft.providers?.[providerName]?.models?.find((model) => model.id);
+    const modelId = providerName === snapshot.defaultProvider && snapshot.defaultModel
+      ? snapshot.defaultModel
+      : available?.id || configured?.id || '';
+    if (!modelId) {
+      window.dispatchEvent(new CustomEvent('pi-studio:toast', {
+        detail: { title: '无法切换供应商', message: '该供应商还没有可用模型，请先在下方添加或拉取模型并保存。', type: 'warning' },
+      }));
+      return;
+    }
+    await controller.setDefaultModel(providerName, modelId);
+  };
 
   if (!desktop) {
     return (
@@ -536,6 +572,32 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
       {snapshot.modelsConfigLoading && !snapshot.modelsConfig ? (
         <div className="settings-help">正在加载模型配置…</div>
       ) : null}
+
+      <div className="provider-selection-panel">
+        <div className="provider-selection-copy">
+          <span className="provider-selection-label">PI 默认供应商</span>
+          <strong>{snapshot.defaultProvider || '尚未设置'}</strong>
+          <span>默认模型：{snapshot.defaultModel || '尚未设置'}{currentProvider && currentModelId ? ` · 当前会话：${currentProvider}/${currentModelId}` : ''}</span>
+        </div>
+        <div className="provider-selection-controls">
+          <label className="provider-selection-control">
+            <span>默认供应商</span>
+            <select className="settings-text-input" value={selectedProvider} onChange={(event) => void switchProvider(event.target.value)} disabled={!providers.length}>
+              <option value="">选择供应商</option>
+              {snapshot.defaultProvider && !draft.providers?.[snapshot.defaultProvider] ? <option value={snapshot.defaultProvider}>{snapshot.defaultProvider}</option> : null}
+              {providers.map(([name]) => <option value={name} key={name}>{name}</option>)}
+            </select>
+          </label>
+          <label className="provider-selection-control">
+            <span>默认模型</span>
+            <select className="settings-text-input" value={snapshot.defaultModel} onChange={(event) => void controller.setDefaultModel(selectedProvider, event.target.value)} disabled={!selectedProviderModels.length}>
+              <option value="">选择模型</option>
+              {snapshot.defaultModel && !selectedProviderModels.some((model) => model.id === snapshot.defaultModel) ? <option value={snapshot.defaultModel}>{snapshot.defaultModel}</option> : null}
+              {selectedProviderModels.map((model) => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
 
       <div className="provider-toolbar">
         <div className="provider-toolbar-copy">

@@ -37,6 +37,13 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
       return [];
     }
   });
+  const [archived, setArchived] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('pi-studio:archived-sessions') || '[]') as string[];
+    } catch {
+      return [];
+    }
+  });
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
 
@@ -53,8 +60,11 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
 
   const filteredProjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return snapshot.sessionProjects;
-    return snapshot.sessionProjects
+    const visible = snapshot.sessionProjects
+      .map((project) => ({ ...project, sessions: project.sessions.filter((session) => !archived.includes(session.filePath)) }))
+      .filter((project) => project.sessions.length > 0);
+    if (!normalized) return visible;
+    return visible
       .map((project) => ({
         ...project,
         sessions: project.sessions.filter((session) =>
@@ -62,7 +72,12 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
         ),
       }))
       .filter((project) => project.sessions.length > 0);
-  }, [query, snapshot.sessionProjects]);
+  }, [archived, query, snapshot.sessionProjects]);
+
+  const archivedSessions = useMemo(
+    () => snapshot.sessionProjects.flatMap((project) => project.sessions.filter((session) => archived.includes(session.filePath)).map((session) => ({ session, project }))),
+    [archived, snapshot.sessionProjects],
+  );
 
   const favoriteSessions = useMemo(
     () =>
@@ -84,10 +99,30 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
     });
   };
 
+  const toggleArchive = (filePath: string) => {
+    setArchived((current) => {
+      const next = current.includes(filePath)
+        ? current.filter((item) => item !== filePath)
+        : [...current, filePath];
+      localStorage.setItem('pi-studio:archived-sessions', JSON.stringify(next));
+      return next;
+    });
+    setContextMenu(null);
+  };
+
   const deleteSession = async (session: PiSession) => {
     if (!window.confirm(`删除“${sessionTitle(session)}”？`)) return;
     await postJson('/api/sessions/delete', { filePath: session.filePath });
-    toggleFavorite(session.filePath);
+    setFavorites((current) => {
+      const next = current.filter((item) => item !== session.filePath);
+      localStorage.setItem('tau-favourites', JSON.stringify(next));
+      return next;
+    });
+    setArchived((current) => {
+      const next = current.filter((item) => item !== session.filePath);
+      localStorage.setItem('pi-studio:archived-sessions', JSON.stringify(next));
+      return next;
+    });
     if (snapshot.selectedSessionFile === session.filePath) await controller.selectSession(null, null);
     await controller.loadSessions();
   };
@@ -102,9 +137,10 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
 
   const renderSession = (session: PiSession, project: SessionProject) => {
     const active = snapshot.selectedSessionFile === session.filePath;
+    const isArchived = archived.includes(session.filePath);
     return (
       <div
-        className={`session-item${active ? ' active' : ''}`}
+        className={`session-item${active ? ' active' : ''}${isArchived ? ' archived' : ''}`}
         data-file-path={session.filePath}
         role="button"
         tabIndex={0}
@@ -217,7 +253,7 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
             </div>
           ) : null}
 
-          {!snapshot.sessionsLoading && filteredProjects.length === 0 ? <div className="session-loading">没有找到会话</div> : null}
+          {!snapshot.sessionsLoading && filteredProjects.length === 0 && archivedSessions.length === 0 ? <div className="session-loading">没有找到会话</div> : null}
           {filteredProjects.map((project) => {
             const key = projectKey(project);
             const isCollapsed = collapsed.has(key);
@@ -240,6 +276,12 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
               </div>
             );
           })}
+          {!query && archivedSessions.length ? (
+            <div className="archived-group">
+              <div className="project-header archived-header"><span className="archive-icon">▱</span><span>已归档</span><span className="project-count">{archivedSessions.length}</span></div>
+              <div className="project-sessions">{archivedSessions.map(({ session, project }) => renderSession(session, project))}</div>
+            </div>
+          ) : null}
         </div>
 
         <nav className="sidebar-footer" aria-label="工作台导航">
@@ -255,6 +297,7 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
           <button className="context-menu-item" type="button" onClick={() => { toggleFavorite(contextMenu.session.filePath); setContextMenu(null); }}><span className="context-menu-icon">{favorites.includes(contextMenu.session.filePath) ? '★' : '☆'}</span>{favorites.includes(contextMenu.session.filePath) ? '取消收藏' : '收藏'}</button>
           <button className="context-menu-item" type="button" onClick={() => { setRenaming(contextMenu.session.filePath); setContextMenu(null); }}><span className="context-menu-icon">A</span>重命名</button>
           <button className="context-menu-item" type="button" onClick={() => { void controller.exportHtml(); setContextMenu(null); }}><span className="context-menu-icon">↗</span>导出 HTML</button>
+          <button className="context-menu-item" type="button" onClick={() => toggleArchive(contextMenu.session.filePath)}><span className="context-menu-icon">▱</span>{archived.includes(contextMenu.session.filePath) ? '移出归档' : '归档会话'}</button>
           <button className="context-menu-item danger" type="button" onClick={() => { void deleteSession(contextMenu.session); setContextMenu(null); }}><span className="context-menu-icon">×</span>删除</button>
         </div>
       ) : null}

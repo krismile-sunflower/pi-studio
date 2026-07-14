@@ -13,6 +13,7 @@ import type {
   ModelsConfigResponse,
   ModelsProviderConfig,
   ModelsProviderModel,
+  PiModelDefaultsResponse,
   PiExtensionInfo,
   PiExtensionsCatalog,
   PiInstance,
@@ -63,6 +64,13 @@ import type {
   StateResponse,
 } from './controller-contracts';
 import { fetchRunningInstances, notify } from './controller-contracts';
+
+function knownModelValue(value?: string | null): string {
+  const normalized = String(value || '').trim();
+  return normalized && !['unknown', 'undefined', 'null'].includes(normalized.toLowerCase())
+    ? normalized
+    : '';
+}
 
 export class PiStudioController {
   readonly transport = new PiTransport(initialTransportUrl(), {
@@ -386,6 +394,16 @@ export class PiStudioController {
       if (handled) return;
     }
 
+    if (appStore.getSnapshot().models.length === 0) {
+      await this.loadModels();
+      if (appStore.getSnapshot().models.length === 0) {
+        const message = '当前 Pi 会话没有加载到可用模型。请在设置中检查 models.json，或重新启动当前项目。';
+        this.addError(message);
+        notify('无法发送消息', message, 'error');
+        return;
+      }
+    }
+
     const prompt = text || '（请查看附图）';
     const command = {
       type: 'prompt',
@@ -458,6 +476,7 @@ export class PiStudioController {
     const selected = result.data?.model || model;
     appStore.update({
       currentModelId: model.id,
+      currentModelProvider: model.provider || '',
       thinkingSupported: modelSupportsThinking(selected),
       thinkingLevel: result.data?.thinkingLevel || appStore.getSnapshot().thinkingLevel,
       contextWindowSize: model.contextWindow || model.context_window || 0,
@@ -532,6 +551,9 @@ export class PiStudioController {
       appStore.update({
         modelsConfig: { providers: {} },
         modelsConfigPath: '',
+        piSettingsPath: '',
+        defaultProvider: '',
+        defaultModel: '',
         modelsConfigError: '模型配置仅在桌面应用中可用。',
         modelsConfigLoading: false,
       });
@@ -542,20 +564,30 @@ export class PiStudioController {
     if (!silent) appStore.update({ modelsConfigLoading: true, modelsConfigError: '' });
     else appStore.update({ modelsConfigError: '' });
     try {
-      const result = await invoke<ModelsConfigResponse>('get_models_config');
+      const [result, defaults] = await Promise.all([
+        invoke<ModelsConfigResponse>('get_models_config'),
+        invoke<PiModelDefaultsResponse>('get_pi_model_defaults'),
+      ]);
       const nextConfig = result.config || { providers: {} };
       const current = appStore.getSnapshot();
       // Skip store write when nothing changed — prevents child draft resets / flicker.
       const samePath = (current.modelsConfigPath || '') === (result.path || '');
       const sameConfig =
         JSON.stringify(current.modelsConfig || { providers: {} }) === JSON.stringify(nextConfig);
-      if (samePath && sameConfig) {
+      const sameDefaults =
+        current.defaultProvider === (defaults.defaultProvider || '') &&
+        current.defaultModel === (defaults.defaultModel || '') &&
+        current.piSettingsPath === (defaults.path || '');
+      if (samePath && sameConfig && sameDefaults) {
         appStore.update({ modelsConfigLoading: false, modelsConfigError: '' });
         return;
       }
       appStore.update({
         modelsConfig: nextConfig,
         modelsConfigPath: result.path || '',
+        piSettingsPath: defaults.path || '',
+        defaultProvider: defaults.defaultProvider || '',
+        defaultModel: defaults.defaultModel || '',
         modelsConfigLoading: false,
         modelsConfigError: '',
       });
@@ -564,6 +596,34 @@ export class PiStudioController {
         modelsConfigLoading: false,
         modelsConfigError: `读取 models.json 失败：${String(error)}`,
       });
+    }
+  }
+
+  async setDefaultModel(provider: string, modelId: string): Promise<boolean> {
+    if (!isDesktop || !provider || !modelId) return false;
+    try {
+      const defaults = await invoke<PiModelDefaultsResponse>('set_pi_model_defaults', {
+        request: { provider, modelId },
+      });
+      appStore.update({
+        piSettingsPath: defaults.path || '',
+        defaultProvider: defaults.defaultProvider || provider,
+        defaultModel: defaults.defaultModel || modelId,
+      });
+
+      const available = appStore.getSnapshot().models.find(
+        (model) => model.provider === provider && model.id === modelId,
+      );
+      if (available) {
+        await this.setModel(available);
+        notify('默认供应商已更新', `${provider} · ${modelId}`, 'success');
+      } else {
+        notify('默认供应商已更新', `${provider} · ${modelId}，将在下次启动 Pi 会话时生效。`, 'success');
+      }
+      return true;
+    } catch (error) {
+      notify('更新默认供应商失败', String(error), 'error');
+      return false;
     }
   }
 
@@ -1272,10 +1332,14 @@ export class PiStudioController {
 
     const model = resolveModel(snapshot.model, appStore.getSnapshot().models);
     if (model) {
+      const modelId = knownModelValue(model.id) || knownModelValue(state.currentModelId) || knownModelValue(state.defaultModel);
+      const available = state.models.find((item) => item.id === modelId);
+      const provider = knownModelValue(model.provider) || knownModelValue(available?.provider) || knownModelValue(state.currentModelProvider) || knownModelValue(state.defaultProvider);
       appStore.update({
-        currentModelId: model.id,
-        thinkingSupported: modelSupportsThinking(model),
-        contextWindowSize: model.contextWindow || model.context_window || state.contextWindowSize,
+        currentModelId: modelId,
+        currentModelProvider: provider,
+        thinkingSupported: modelSupportsThinking(available || model),
+        contextWindowSize: available?.contextWindow || available?.context_window || model.contextWindow || model.context_window || state.contextWindowSize,
       });
     }
     if (snapshot.thinkingLevel) appStore.update({ thinkingLevel: snapshot.thinkingLevel });
@@ -1450,20 +1514,47 @@ export class PiStudioController {
     await this.sendMessage(next.message, next.images || []);
   }
 
-  async loadModels(): Promise<void> {
+  async loadModels(options: { tryRefresh?: boolean } = {}): Promise<void> {
     const [models, state] = await Promise.all([
       this.rpcCommand<ModelsResponse>({ type: 'get_available_models' }, '', true),
       this.rpcCommand<StateResponse>({ type: 'get_state' }, '', true),
     ]);
     const available = models.success ? models.data?.models || [] : [];
+    if (available.length === 0 && options.tryRefresh !== false) {
+      const commands = await this.rpcCommand<{ commands?: SlashCommand[] }>(
+        { type: 'get_commands' },
+        '',
+        true,
+      );
+      const canRefresh = commands.success && commands.data?.commands?.some(
+        (command) => command.name === 'refresh-models' || command.name === '/refresh-models',
+      );
+      if (canRefresh) {
+        const refreshed = await this.rpcCommand(
+          { type: 'prompt', message: '/refresh-models' },
+          '',
+          true,
+        );
+        if (refreshed.success) {
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
+          return this.loadModels({ tryRefresh: false });
+        }
+      }
+    }
     const current = state.success ? resolveModel(state.data?.model, available) : null;
+    const previous = appStore.getSnapshot();
+    const currentId = knownModelValue(current?.id) || knownModelValue(previous.currentModelId) || knownModelValue(previous.defaultModel);
+    const availableCurrent = available.find((model) => model.id === currentId && (!previous.defaultProvider || model.provider === previous.defaultProvider))
+      || available.find((model) => model.id === currentId);
+    const currentProvider = knownModelValue(current?.provider) || knownModelValue(availableCurrent?.provider) || knownModelValue(previous.currentModelProvider) || knownModelValue(previous.defaultProvider);
     appStore.update({
       models: available,
-      currentModelId: current?.id || modelIdFromValue(state.data?.model),
-      thinkingLevel: state.data?.thinkingLevel || appStore.getSnapshot().thinkingLevel,
-      thinkingSupported: modelSupportsThinking(current),
+      currentModelId: currentId || modelIdFromValue(state.data?.model),
+      currentModelProvider: currentProvider,
+      thinkingLevel: state.data?.thinkingLevel || previous.thinkingLevel,
+      thinkingSupported: modelSupportsThinking(availableCurrent || current),
       contextWindowSize:
-        current?.contextWindow || current?.context_window || appStore.getSnapshot().contextWindowSize,
+        availableCurrent?.contextWindow || availableCurrent?.context_window || current?.contextWindow || current?.context_window || previous.contextWindowSize,
     });
   }
 

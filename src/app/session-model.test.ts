@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEntry, SessionProject } from '../lib/types';
-import { buildHistoryTimeline, mergeSessionProjects } from './session-model';
+import { buildHistoryTimeline, mergeSessionProjects, resolveModel } from './session-model';
 
 describe('session model', () => {
+  it('replaces an unknown provider with metadata from the available model list', () => {
+    const model = resolveModel(
+      { id: 'gpt-5.6-terra', provider: 'unknown' },
+      [{ id: 'gpt-5.6-terra', provider: 'ikun', name: 'GPT-5.6 Terra' }],
+    );
+
+    expect(model?.provider).toBe('ikun');
+    expect(model?.id).toBe('gpt-5.6-terra');
+  });
+
   it('merges API and native session groups without duplicate files', () => {
     const api: SessionProject[] = [
       {
