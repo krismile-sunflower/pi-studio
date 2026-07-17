@@ -1,6 +1,6 @@
 # PiCode
 
-PiCode is a Tauri desktop client for Pi. Its web UI is built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts a bundled Pi RPC process in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions without requiring users to open a terminal.
+PiCode is a Tauri desktop client for Pi. Its web UI is built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts a bundled Pi RPC process in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions and packages without requiring users to open a terminal.
 
 中文文档: [README.zh-CN.md](README.zh-CN.md)
 

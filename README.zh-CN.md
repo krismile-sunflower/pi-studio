@@ -1,6 +1,6 @@
 # PiCode
 
-PiCode 是一个面向 Pi 的 Tauri 桌面客户端。它的 Web UI 和 mirror 工作流参考了 [`deflating/tau`](https://github.com/deflating/tau)，并在此基础上改造成桌面端应用：可以在后台启动 Pi，让用户不需要手动打开终端执行 `pi`，就能聊天、查看本地会话、继续指定会话，并安装 Pi 扩展。
+PiCode 是一个面向 Pi 的 Tauri 桌面客户端。它的 Web UI 和 mirror 工作流参考了 [`deflating/tau`](https://github.com/deflating/tau)，并在此基础上改造成桌面端应用：可以在后台启动 Pi，让用户不需要手动打开终端执行 `pi`，就能聊天、查看本地会话、继续指定会话，并安装 Pi 扩展和软件包。
 
 English README: [README.md](README.md)
 
@@ -11,6 +11,7 @@ English README: [README.md](README.md)
 - 发布包使用构建机本机已安装的 `pi` 作为打包来源。
 - 按平台打包 Node runtime 和 Pi npm 包。
 - 开发环境保留 `PI_DESKTOP_CLI` 和系统 `PATH` 里的 `pi` 作为 fallback。
+- 在“扩展”页面可管理全局 Pi 软件包，支持 `npm:`、`git:` 和本地路径来源。
 - 支持项目文件夹模式和无文件夹模式。
 - 从 `~/.pi/agent/sessions` 读取本地历史会话。
 - 点击侧边栏会话后，直接读取对应 JSONL 文件并在该会话里继续聊天。

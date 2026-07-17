@@ -5,6 +5,7 @@ import type {
   ModelsProviderConfig,
   ModelsProviderModel,
   PiExtensionInfo,
+  PiPackageInfo,
   ProjectInfo,
   ThemeId,
 } from '../lib/types';
@@ -1059,19 +1060,6 @@ export function ExtensionsView({ snapshot }: { snapshot: AppSnapshot }) {
   const status = snapshot.extensionError || (snapshot.extensionsLoading ? '正在加载扩展…' : extensions.length ? `显示 ${filtered.length} / ${extensions.length} 个扩展 · 安装目录：${snapshot.extensions?.installDir || ''}` : '未找到 Pi 扩展目录，请重新运行 vendor 脚本或在本机安装 Pi。');
 
   return (
-    <section className="extensions-panel workspace-view">
-      <div className="settings-header extensions-header">
-        <div className="settings-header-copy">
-          <span className="eyebrow">能力中心</span>
-          <div className="settings-title-row">
-            <h3>扩展</h3>
-            <button className="settings-close" type="button" aria-label="关闭扩展" onClick={() => controller.returnToChat()}>
-              <Icon name="close" width={16} height={16} />
-            </button>
-          </div>
-          <p className="settings-subtitle">浏览并安装 Pi 全局扩展</p>
-        </div>
-      </div>
       <div className="extensions-body">
         <div className="extensions-toolbar">
           <label className="extensions-search-wrap"><Icon name="search" width={14} height={14} /><input type="search" className="extensions-search" placeholder="搜索扩展" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
@@ -1086,6 +1074,60 @@ export function ExtensionsView({ snapshot }: { snapshot: AppSnapshot }) {
           {!snapshot.extensionsLoading && filtered.length === 0 ? <div className="extensions-empty">没有符合当前筛选条件的扩展。</div> : null}
         </div>
       </div>
+  );
+}
+
+export function PackagesView({ snapshot }: { snapshot: AppSnapshot }) {
+  const [packageSource, setPackageSource] = useState('');
+  const [query, setQuery] = useState('');
+  return (
+      <div className="extensions-body">
+        <section className="packages-section">
+          <div className="packages-section-header"><div><h4>Pi 软件包目录</h4><p>搜索官方目录并一键拉取；也可输入 npm、Git 或本地路径。</p></div><button className="extensions-refresh" type="button" title="刷新已安装软件包" aria-label="刷新已安装软件包" onClick={() => void controller.loadPackages(true)}><Icon name="refresh" width={14} height={14} /></button></div>
+          <form className="package-search-form" onSubmit={(event) => { event.preventDefault(); void controller.searchPackages(query); }}><label className="extensions-search-wrap"><Icon name="search" width={14} height={14} /><input type="search" className="extensions-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索官方 Pi 软件包" /></label><button className="settings-action-btn" type="submit" disabled={snapshot.packageSearchLoading}>{snapshot.packageSearchLoading ? '搜索中…' : '搜索'}</button></form>
+          {snapshot.packageSearchError ? <div className="packages-status error">{snapshot.packageSearchError}</div> : null}
+          {snapshot.packageSearchResults.length ? <><div className="package-results-heading"><strong>搜索结果</strong><span>{snapshot.packageSearchResults.length} 个软件包</span></div><div className="packages-list package-catalog-list">{snapshot.packageSearchResults.map((item) => <article className="package-row package-catalog-card" key={item.name}><div className="package-main"><div className="package-name-line"><code>{item.name}</code><span>{item.packageType || 'package'}{item.downloads ? ` · ${item.downloads}` : ''}</span></div><p>{item.description || '该软件包没有提供简介。'}</p></div><button className="settings-action-btn primary" type="button" disabled={snapshot.packageInstalling} onClick={() => void controller.installPackage(`npm:${item.name}`)}>{snapshot.packageInstalling ? '拉取中' : '拉取'}</button></article>)}</div></> : null}
+          <div className="package-manual-heading"><strong>手动添加</strong><span>npm、Git 或本地路径</span></div>
+          <form className="package-install-form" onSubmit={(event) => { event.preventDefault(); const source = packageSource.trim(); if (!source) return; void controller.installPackage(source); }}>
+            <input className="settings-text-input" value={packageSource} onChange={(event) => setPackageSource(event.target.value)} placeholder="npm:包名、git:github.com/用户/仓库或本地路径" aria-label="Pi 软件包来源" />
+            <button className="settings-action-btn primary" type="submit" disabled={!packageSource.trim() || snapshot.packageInstalling}>{snapshot.packageInstalling ? '正在安装…' : '安装软件包'}</button>
+          </form>
+          <p className="packages-security-note">第三方软件包可执行扩展代码。请仅安装你信任的来源。</p>
+          {snapshot.packageError ? <div className="packages-status error">{snapshot.packageError}</div> : null}
+          <h4 className="packages-installed-title">已安装的软件包</h4>{snapshot.packagesLoading ? <div className="packages-status">正在读取已安装软件包…</div> : null}
+          {!snapshot.packagesLoading && !snapshot.packageError && snapshot.packages ? (snapshot.packages.packages.length ? <div className="packages-list">{snapshot.packages.packages.map((item) => <PackageRow item={item} removing={snapshot.packageRemovingSource === item.source} key={item.source} />)}</div> : <div className="packages-status">尚未安装全局 Pi 软件包。</div>) : null}
+        </section>
+      </div>
+  );
+}
+
+export function CustomizationView({ snapshot }: { snapshot: AppSnapshot }) {
+  const [tab, setTab] = useState<'extensions' | 'packages'>('extensions');
+  const content = tab === 'extensions' ? <ExtensionsView snapshot={snapshot} /> : <PackagesView snapshot={snapshot} />;
+  return (
+    <section className="extensions-panel workspace-view" aria-label="定制">
+      <div className="settings-header extensions-header">
+        <div className="settings-header-copy">
+          <span className="eyebrow">能力中心</span>
+          <div className="settings-title-row"><h3>定制</h3><button className="settings-close" type="button" aria-label="关闭定制" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button></div>
+          <p className="settings-subtitle">为 Pi 添加独立扩展，或安装包含扩展、技能、提示模板和主题的软件包。</p>
+        </div>
+      </div>
+      <nav className="customization-tabs" aria-label="定制内容">
+        <button type="button" className={tab === 'extensions' ? 'active' : ''} aria-current={tab === 'extensions' ? 'page' : undefined} onClick={() => setTab('extensions')}>扩展</button>
+        <span aria-hidden="true">/</span>
+        <button type="button" className={tab === 'packages' ? 'active' : ''} aria-current={tab === 'packages' ? 'page' : undefined} onClick={() => setTab('packages')}>软件包</button>
+      </nav>
+      {content}
     </section>
   );
+}
+
+function PackageRow({ item, removing }: { item: PiPackageInfo; removing: boolean }) {
+  return <div className="package-row">
+    <div className="package-main"><code>{item.source}</code><span>{item.enabled ? '已启用' : '已禁用'}</span></div>
+    <button className="settings-action-btn danger" type="button" disabled={removing} onClick={() => {
+      if (window.confirm(`移除 Pi 软件包“${item.source}”？`)) void controller.removePackage(item.source);
+    }}>{removing ? '正在移除…' : '移除'}</button>
+  </div>;
 }

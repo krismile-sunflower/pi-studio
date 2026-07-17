@@ -26,6 +26,33 @@ struct PiCommand {
     is_system_fallback: bool,
 }
 
+pub(crate) fn run_pi_package_command(app: &AppHandle, args: &[String]) -> Result<String, String> {
+    let pi_command = resolve_pi_command(app)?;
+    let mut command = Command::new(&pi_command.program);
+    command
+        .args(&pi_command.initial_args)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command.output().map_err(|err| {
+        format!("无法运行 Pi 命令 `{}`：{err}", pi_command.display)
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(if stdout.is_empty() { stderr } else { stdout })
+    } else {
+        Err(if stderr.is_empty() {
+            format!("Pi 命令执行失败：{}", stdout)
+        } else {
+            stderr
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiRuntimeInfo {

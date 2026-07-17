@@ -1,6 +1,6 @@
 export type TransportKind = 'rpc' | 'mirror';
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'disconnected';
-export type WorkspaceView = 'chat' | 'projects' | 'changes' | 'extensions' | 'settings';
+export type WorkspaceView = 'chat' | 'projects' | 'changes' | 'customization' | 'settings';
 export type ThemeId = 'dark' | 'light';
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
 
@@ -196,6 +196,23 @@ export interface PiExtensionsCatalog {
   installDir: string;
   catalogRoots: string[];
   extensions: PiExtensionInfo[];
+}
+
+export interface PiPackageInfo {
+  source: string;
+  enabled: boolean;
+}
+
+export interface PiPackagesCatalog {
+  settingsPath: string;
+  packages: PiPackageInfo[];
+}
+
+export interface PiPackageCatalogItem {
+  name: string;
+  description: string;
+  packageType: string;
+  downloads: string;
 }
 
 export interface FileEntry {
@@ -444,6 +461,14 @@ export interface AppSnapshot {
   extensionsLoading: boolean;
   extensionError: string;
   extensionInstallingId: string | null;
+  packages: PiPackagesCatalog | null;
+  packagesLoading: boolean;
+  packageError: string;
+  packageInstalling: boolean;
+  packageRemovingSource: string | null;
+  packageSearchResults: PiPackageCatalogItem[];
+  packageSearchLoading: boolean;
+  packageSearchError: string;
   settings: DesktopSettings | null;
   runtimeInfo: PiRuntimeInfo | null;
   autostartEnabled: boolean;

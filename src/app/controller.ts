@@ -16,6 +16,8 @@ import type {
   PiModelDefaultsResponse,
   PiExtensionInfo,
   PiExtensionsCatalog,
+  PiPackagesCatalog,
+  PiPackageCatalogItem,
   PiInstance,
   PiMessage,
   PiRuntimeInfo,
@@ -160,7 +162,11 @@ export class PiStudioController {
       void this.loadSettings();
       void this.loadModelsConfig();
     }
-    if (view === 'extensions') void this.loadExtensions();
+    if (view === 'customization') {
+      void this.loadExtensions();
+      void this.loadPackages();
+      void this.searchPackages();
+    }
     if (view === 'changes') void this.loadGitStatus();
   }
 
@@ -1048,6 +1054,58 @@ export class PiStudioController {
     } catch (error) {
       appStore.update({ extensionInstallingId: null, extensionError: `安装失败：${String(error)}` });
       notify('扩展安装失败', String(error), 'error');
+    }
+  }
+
+  async loadPackages(force = false): Promise<void> {
+    if (!isDesktop) {
+      appStore.update({ packages: { settingsPath: '', packages: [] }, packageError: 'Pi 软件包仅在桌面应用中可用。' });
+      return;
+    }
+    if (appStore.getSnapshot().packages && !force) return;
+    appStore.update({ packagesLoading: true, packageError: '' });
+    try {
+      const packages = await invoke<PiPackagesCatalog>('list_pi_packages');
+      appStore.update({ packages, packagesLoading: false });
+    } catch (error) {
+      appStore.update({ packages: { settingsPath: '', packages: [] }, packagesLoading: false, packageError: `软件包加载失败：${String(error)}` });
+    }
+  }
+
+  async installPackage(source: string): Promise<void> {
+    if (!isDesktop || appStore.getSnapshot().packageInstalling) return;
+    appStore.update({ packageInstalling: true, packageError: '' });
+    try {
+      const packages = await invoke<PiPackagesCatalog>('install_pi_package', { request: { source } });
+      appStore.update({ packages, packageInstalling: false });
+      notify('Pi 软件包安装完成', source.trim(), 'success');
+    } catch (error) {
+      appStore.update({ packageInstalling: false, packageError: `安装失败：${String(error)}` });
+      notify('Pi 软件包安装失败', String(error), 'error');
+    }
+  }
+
+  async removePackage(source: string): Promise<void> {
+    if (!isDesktop || appStore.getSnapshot().packageRemovingSource) return;
+    appStore.update({ packageRemovingSource: source, packageError: '' });
+    try {
+      const packages = await invoke<PiPackagesCatalog>('remove_pi_package', { request: { source } });
+      appStore.update({ packages, packageRemovingSource: null });
+      notify('Pi 软件包已移除', source, 'success');
+    } catch (error) {
+      appStore.update({ packageRemovingSource: null, packageError: `移除失败：${String(error)}` });
+      notify('Pi 软件包移除失败', String(error), 'error');
+    }
+  }
+
+  async searchPackages(query = ''): Promise<void> {
+    if (!isDesktop) return;
+    appStore.update({ packageSearchLoading: true, packageSearchError: '' });
+    try {
+      const packageSearchResults = await invoke<PiPackageCatalogItem[]>('search_pi_packages', { query });
+      appStore.update({ packageSearchResults, packageSearchLoading: false });
+    } catch (error) {
+      appStore.update({ packageSearchResults: [], packageSearchLoading: false, packageSearchError: `软件包搜索失败：${String(error)}` });
     }
   }
 

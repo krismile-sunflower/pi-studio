@@ -131,7 +131,7 @@ function MessageItem({
             ))}
           </div>
         ) : null}
-        {message.role === 'assistant' && !message.streaming ? (
+        {message.role === 'assistant' ? (
           <Markdown>{message.content}</Markdown>
         ) : (
           <span className={message.streaming ? 'streaming-text' : undefined}>{message.content}</span>

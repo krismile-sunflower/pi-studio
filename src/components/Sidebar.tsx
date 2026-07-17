@@ -286,7 +286,7 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
 
         <nav className="sidebar-footer" aria-label="工作台导航">
           <button className={`sidebar-nav-item${snapshot.view === 'projects' ? ' active' : ''}`} type="button" onClick={() => controller.setView('projects')}><Icon name="grid" width={17} height={17} /><span>项目</span></button>
-          <button className={`sidebar-nav-item${snapshot.view === 'extensions' ? ' active' : ''}`} type="button" onClick={() => controller.setView('extensions')}><Icon name="download" width={17} height={17} /><span>扩展</span></button>
+          <button className={`sidebar-nav-item${snapshot.view === 'customization' ? ' active' : ''}`} type="button" onClick={() => controller.setView('customization')}><Icon name="download" width={17} height={17} /><span>定制</span></button>
           <button className={`sidebar-nav-item${snapshot.view === 'settings' ? ' active' : ''}`} type="button" onClick={() => controller.setView('settings')}><Icon name="settings" width={17} height={17} /><span>设置</span></button>
         </nav>
       </aside>

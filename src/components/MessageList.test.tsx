@@ -56,6 +56,22 @@ describe('MessageList', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('连接失败');
   });
 
+  it('renders streamed assistant content as Markdown before the response completes', () => {
+    render(<MessageList timeline={[{
+      id: 'streaming-markdown',
+      kind: 'message',
+      message: {
+        id: 'streaming-markdown',
+        role: 'assistant',
+        content: '## 正在分析\n\n这里有 **实时格式**。',
+        streaming: true,
+      },
+    }]} streaming />);
+
+    expect(screen.getByRole('heading', { name: '正在分析' })).toBeInTheDocument();
+    expect(screen.getByText('实时格式').tagName).toBe('STRONG');
+  });
+
   it('keeps completed terminal commands collapsed until opened', () => {
     const timeline: TimelineItem[] = [{
       id: 'bash-1',
