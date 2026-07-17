@@ -186,5 +186,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running pi-studio");
+        .expect("error while running PiCode");
 }

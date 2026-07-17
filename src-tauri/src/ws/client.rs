@@ -40,7 +40,7 @@ pub async fn ws_connect(
     }
     let (stream, _) = tokio_tungstenite::connect_async(&url)
         .await
-        .map_err(|err| format!("Failed to connect pi-studio WebSocket at {url}: {err}"))?;
+        .map_err(|err| format!("Failed to connect PiCode WebSocket at {url}: {err}"))?;
     let (mut write, mut read) = stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
@@ -102,7 +102,7 @@ fn maybe_notify_agent_end(app: &AppHandle, text: &str) {
         let _ = app
             .notification()
             .builder()
-            .title("pi-studio")
+            .title("PiCode")
             .body("Pi finished the current task.")
             .auto_cancel()
             .show();
@@ -122,9 +122,9 @@ pub async fn ws_send(state: State<'_, AppState>, request: WsSendRequest) -> Resu
         .lock()
         .map_err(lock_err)?
         .clone()
-        .ok_or_else(|| "pi-studio WebSocket is not connected".to_string())?;
+        .ok_or_else(|| "PiCode WebSocket is not connected".to_string())?;
 
     sender
         .send(request.message)
-        .map_err(|_| "pi-studio WebSocket writer is closed".to_string())
+        .map_err(|_| "PiCode WebSocket writer is closed".to_string())
 }

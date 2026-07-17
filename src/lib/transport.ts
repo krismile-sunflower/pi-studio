@@ -100,13 +100,13 @@ export class PiTransport {
           pid: window.tauDesktop.instanceId,
           message: JSON.stringify(data),
         },
-      }).catch((error) => this.handlers.onServerError(`pi-studio RPC 发送失败：${String(error)}`));
+      }).catch((error) => this.handlers.onServerError(`PiCode RPC 发送失败：${String(error)}`));
       return true;
     }
 
     if (this.usesTauriBridge()) {
       void invoke('ws_send', { request: { message: JSON.stringify(data) } }).catch((error) =>
-        this.handlers.onServerError(`pi-studio WebSocket 发送失败：${String(error)}`),
+        this.handlers.onServerError(`PiCode WebSocket 发送失败：${String(error)}`),
       );
       return true;
     }

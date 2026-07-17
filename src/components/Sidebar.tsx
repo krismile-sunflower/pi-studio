@@ -187,7 +187,7 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
     ? '无文件夹模式'
     : basename(snapshot.workspace.path) || '准备工作区…';
   const workspacePath = snapshot.workspace.noFolder
-    ? 'pi-studio 专属目录'
+    ? 'PiCode 专属目录'
     : snapshot.workspace.path || '点击选择项目';
 
   return (
@@ -199,7 +199,7 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
               <img src="/icons/tau-192.png" alt="" className="tau-icon" />
             </button>
           </div>
-          <div className="brand-copy"><strong>pi-studio</strong><span>AI 开发工作台</span></div>
+          <div className="brand-copy"><strong>PiCode</strong><span>AI 开发工作台</span></div>
           <button className="icon-btn sidebar-collapse-btn" type="button" onClick={onToggle} title={open ? '折叠会话栏' : '展开会话栏'} aria-expanded={open}>
             <Icon name="arrow-left" />
           </button>

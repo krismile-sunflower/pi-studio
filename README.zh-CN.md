@@ -1,6 +1,6 @@
-# pi-studio
+# PiCode
 
-pi-studio 是一个面向 Pi 的 Tauri 桌面客户端。它的 Web UI 和 mirror 工作流参考了 [`deflating/tau`](https://github.com/deflating/tau)，并在此基础上改造成桌面端应用：可以在后台启动 Pi，让用户不需要手动打开终端执行 `pi`，就能聊天、查看本地会话、继续指定会话，并安装 Pi 扩展。
+PiCode 是一个面向 Pi 的 Tauri 桌面客户端。它的 Web UI 和 mirror 工作流参考了 [`deflating/tau`](https://github.com/deflating/tau)，并在此基础上改造成桌面端应用：可以在后台启动 Pi，让用户不需要手动打开终端执行 `pi`，就能聊天、查看本地会话、继续指定会话，并安装 Pi 扩展。
 
 English README: [README.md](README.md)
 
@@ -139,11 +139,11 @@ macOS/Linux：
 pnpm exec tauri build --debug
 ```
 
-Windows 上如果 `target/debug/pi-studio.exe` 正在运行，打包会因为无法覆盖 exe 而失败。关闭正在运行的 pi-studio 后重新执行即可。
+Windows 上如果 `target/debug/PiCode.exe` 正在运行，打包会因为无法覆盖 exe 而失败。关闭正在运行的 PiCode 后重新执行即可。
 
 ## 会话机制
 
-pi-studio 从这里读取 Pi 会话：
+PiCode 从这里读取 Pi 会话：
 
 ```text
 ~/.pi/agent/sessions
@@ -181,7 +181,7 @@ npm install --omit=dev
 ```powershell
 pnpm build
 cargo check --manifest-path .\src-tauri\Cargo.toml
-.\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\pi-studio -Port 3991 -TimeoutSeconds 45
+.\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\PiCode -Port 3991 -TimeoutSeconds 45
 pnpm exec tauri build --debug
 ```
 
@@ -197,25 +197,25 @@ Pi 没有启动：
 
 - 确认构建机器上 `pi --version` 可用。
 - 重新运行对应平台的 vendor 脚本。
-- 查看应用配置目录下的 `pi-studio/logs` 日志。
+- 查看应用配置目录下的 `pi-studio/logs` 日志（为兼容已有设置，仍沿用旧目录名）。
 - 开发环境可以设置 `PI_DESKTOP_CLI` 指向一个确定可用的 Pi。
 
 侧边栏没有会话：
 
 - 确认 `~/.pi/agent/sessions` 下存在 JSONL 会话文件。
 - 点击侧边栏刷新按钮。
-- 从 pi-studio 重新启动 Pi，让 mirror extension 刷新实时状态。
+- 从 PiCode 重新启动 Pi，让 mirror extension 刷新实时状态。
 
-Windows 打包提示无法覆盖 `pi-studio.exe`：
+Windows 打包提示无法覆盖 `PiCode.exe`：
 
-- 关闭正在运行的 pi-studio 窗口。
-- 在任务管理器中确认没有 `pi-studio.exe`。
+- 关闭正在运行的 PiCode 窗口。
+- 在任务管理器中确认没有 `PiCode.exe`。
 - 重新执行 `pnpm exec tauri build --debug`。
 
 ## 说明
 
-pi-studio 不是 Tau 项目本体。它参考并改造了 Tau 的浏览器 UI 与 mirror extension 思路，用于提供独立的桌面端体验。对外桌面端产品名是 `pi-studio`。
+PiCode 不是 Tau 项目本体。它参考并改造了 Tau 的浏览器 UI 与 mirror extension 思路，用于提供独立的桌面端体验。对外桌面端产品名是 `PiCode`。
 
 ## 来源说明
 
-本项目参考 [`deflating/tau`](https://github.com/deflating/tau) 的浏览器化 Pi UI 和 mirror 工作流。Tau 上游仍是独立项目；pi-studio 在此基础上实现了 Tauri 桌面客户端、Pi 后台启动、本地会话管理和扩展安装等桌面端能力。
+本项目参考 [`deflating/tau`](https://github.com/deflating/tau) 的浏览器化 Pi UI 和 mirror 工作流。Tau 上游仍是独立项目；PiCode 在此基础上实现了 Tauri 桌面客户端、Pi 后台启动、本地会话管理和扩展安装等桌面端能力。

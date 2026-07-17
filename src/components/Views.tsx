@@ -117,7 +117,7 @@ export function ProjectsView({ snapshot }: { snapshot: AppSnapshot }) {
               <div className="launcher-card-icon"><Icon name="plus" width={20} height={20} /></div>
               <div className="launcher-card-main">
                 <div className="launcher-card-name">无文件夹模式 {snapshot.noFolderActive ? <span className="launcher-live">运行中</span> : null}</div>
-                <div className="launcher-card-path">使用 pi-studio 专属目录，不关联本地项目</div>
+                <div className="launcher-card-path">使用 PiCode 专属目录，不关联本地项目</div>
                 <div className="launcher-card-meta"><span>适合快速提问和临时任务</span></div>
               </div>
               <div className="launcher-card-actions">

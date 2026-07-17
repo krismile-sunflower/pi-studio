@@ -3,13 +3,13 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "tray-show", "显示 pi-studio", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "tray-show", "显示 PiCode", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray-quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tau-32.png"))?;
 
     TrayIconBuilder::with_id("pi-studio")
-        .tooltip("pi-studio")
+        .tooltip("PiCode")
         .icon(icon)
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -37,8 +37,8 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
     let about_metadata = AboutMetadata {
         name: Some(pkg.name.clone()),
         version: Some(pkg.version.to_string()),
-        copyright: Some("pi-studio".into()),
-        authors: Some(vec!["pi-studio Contributors".into()]),
+        copyright: Some("PiCode".into()),
+        authors: Some(vec!["PiCode Contributors".into()]),
         comments: Some("Desktop client for Pi".into()),
         ..Default::default()
     };
@@ -76,7 +76,7 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
             &toggle_window_item,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
-            &PredefinedMenuItem::quit(app, Some("退出 pi-studio"))?,
+            &PredefinedMenuItem::quit(app, Some("退出 PiCode"))?,
         ],
     )?;
 
@@ -110,7 +110,7 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         &[&PredefinedMenuItem::about(
             app,
-            Some("关于 pi-studio"),
+            Some("关于 PiCode"),
             Some(about_metadata),
         )?],
     )?;

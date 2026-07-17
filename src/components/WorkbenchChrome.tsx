@@ -85,7 +85,7 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
   const total = snapshot.contextWindowSize;
   const percent = total > 0 && used > 0 ? Math.round((used / total) * 100) : 0;
   const workspaceTitle = snapshot.workspace.noFolder
-    ? 'pi-studio 专属目录'
+    ? 'PiCode 专属目录'
     : snapshot.workspace.path || '工作区';
   const connectionText = snapshot.isStreaming
     ? 'Pi 正在处理…'

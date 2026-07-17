@@ -1,5 +1,5 @@
 /**
- * Models refresh extension for pi-studio.
+ * Models refresh extension for PiCode.
  *
  * Pi's RPC `get_available_models` reads the in-memory ModelRegistry and does not
  * re-read ~/.pi/agent/models.json. Interactive mode calls modelRegistry.refresh()

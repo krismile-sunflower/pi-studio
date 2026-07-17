@@ -1,8 +1,8 @@
 [package]
-name = "pi-studio"
+name = "picode"
 version = "0.1.0"
-description = "pi-studio desktop client for Pi"
-authors = ["pi-studio Contributors"]
+description = "PiCode desktop client for Pi"
+authors = ["PiCode Contributors"]
 edition = "2021"
 
 [lib]

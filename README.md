@@ -1,6 +1,6 @@
-# pi-studio
+# PiCode
 
-pi-studio is a Tauri desktop client for Pi. Its web UI is built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts a bundled Pi RPC process in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions without requiring users to open a terminal.
+PiCode is a Tauri desktop client for Pi. Its web UI is built with reference to [`deflating/tau`](https://github.com/deflating/tau), then adapted into a desktop app that starts a bundled Pi RPC process in the background, browses local Pi sessions, continues selected sessions, and installs Pi extensions without requiring users to open a terminal.
 
 中文文档: [README.zh-CN.md](README.zh-CN.md)
 
@@ -78,7 +78,7 @@ cargo check --manifest-path ./src-tauri/Cargo.toml
 
 ## Pi Runtime Packaging
 
-Release builds vendor the build machine's installed `pi` runtime into Tauri resources. pi-studio then launches the bundled Pi process in the background.
+Release builds vendor the build machine's installed `pi` runtime into Tauri resources. PiCode then launches the bundled Pi process in the background.
 
 Platform resource directories:
 
@@ -149,11 +149,11 @@ Manual debug build:
 pnpm exec tauri build --debug
 ```
 
-Generated installers use the `pi-studio` product name. On Windows, if `target/debug/pi-studio.exe` is currently running, close the app before rebuilding because Windows will not overwrite a running executable.
+Generated installers use the `PiCode` product name. On Windows, if `target/debug/PiCode.exe` is currently running, close the app before rebuilding because Windows will not overwrite a running executable.
 
 ## Sessions
 
-pi-studio reads Pi session files from:
+PiCode reads Pi session files from:
 
 ```text
 ~/.pi/agent/sessions
@@ -191,7 +191,7 @@ Recommended checks:
 ```powershell
 pnpm build
 cargo check --manifest-path .\src-tauri\Cargo.toml
-.\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\pi-studio -Port 3991 -TimeoutSeconds 45
+.\scripts\smoke-pi-tau.ps1 -ProjectPath D:\myproduction\PiCode -Port 3991 -TimeoutSeconds 45
 pnpm exec tauri build --debug
 ```
 
@@ -209,25 +209,25 @@ If Pi does not start:
 
 - Confirm `pi --version` works on the build machine.
 - Re-run the vendor script for your platform.
-- Check app logs under the platform config directory, for example `pi-studio/logs`.
+- Check app logs under the platform config directory, for example `pi-studio/logs` (the legacy directory is retained so existing settings continue to work).
 - In development, set `PI_DESKTOP_CLI` to a known working Pi executable.
 
 If sessions do not appear:
 
 - Confirm files exist under `~/.pi/agent/sessions`.
 - Click the session refresh button.
-- Start or restart Pi from pi-studio so the native RPC session can refresh live state.
+- Start or restart Pi from PiCode so the native RPC session can refresh live state.
 
-If Windows debug build cannot overwrite `pi-studio.exe`:
+If Windows debug build cannot overwrite `PiCode.exe`:
 
-- Close the running pi-studio window.
-- Check Task Manager for `pi-studio.exe`.
+- Close the running PiCode window.
+- Check Task Manager for `PiCode.exe`.
 - Run `pnpm exec tauri build --debug` again.
 
 ## Notes
 
-pi-studio is not presented as the Tau project itself. It references and adapts Tau's browser UI for a standalone desktop experience, while the desktop app talks to Pi through native RPC by default. The public desktop product name is `pi-studio`.
+PiCode is not presented as the Tau project itself. It references and adapts Tau's browser UI for a standalone desktop experience, while the desktop app talks to Pi through native RPC by default. The public desktop product name is `PiCode`.
 
 ## Attribution
 
-This project references [`deflating/tau`](https://github.com/deflating/tau) for the browser-based Pi UI and mirror workflow. Upstream Tau remains a separate project; pi-studio adapts those ideas into a Tauri desktop client with bundled Pi startup, native RPC transport, local session management, and extension installation.
+This project references [`deflating/tau`](https://github.com/deflating/tau) for the browser-based Pi UI and mirror workflow. Upstream Tau remains a separate project; PiCode adapts those ideas into a Tauri desktop client with bundled Pi startup, native RPC transport, local session management, and extension installation.

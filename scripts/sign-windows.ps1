@@ -8,14 +8,14 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $artifacts = @(
-  Join-Path $root "src-tauri\target\release\bundle\nsis\pi-studio_0.1.0_x64-setup.exe",
-  Join-Path $root "src-tauri\target\release\bundle\msi\pi-studio_0.1.0_x64_en-US.msi",
-  Join-Path $root "src-tauri\target\debug\bundle\nsis\pi-studio_0.1.0_x64-setup.exe",
-  Join-Path $root "src-tauri\target\debug\bundle\msi\pi-studio_0.1.0_x64_en-US.msi"
+  Join-Path $root "src-tauri\target\release\bundle\nsis\PiCode_0.1.0_x64-setup.exe",
+  Join-Path $root "src-tauri\target\release\bundle\msi\PiCode_0.1.0_x64_en-US.msi",
+  Join-Path $root "src-tauri\target\debug\bundle\nsis\PiCode_0.1.0_x64-setup.exe",
+  Join-Path $root "src-tauri\target\debug\bundle\msi\PiCode_0.1.0_x64_en-US.msi"
 ) | Where-Object { Test-Path $_ }
 
 if (-not $artifacts) {
-  throw "No pi-studio installers found. Run pnpm exec tauri build first."
+  throw "No PiCode installers found. Run pnpm exec tauri build first."
 }
 
 $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue

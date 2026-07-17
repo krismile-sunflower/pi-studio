@@ -1,6 +1,6 @@
 # Pi Sidecar Runtime
 
-pi-studio vendors the build machine's installed Pi runtime into a platform-specific directory before release builds.
+PiCode vendors the build machine's installed Pi runtime into a platform-specific directory before release builds.
 
 Expected directories:
 
@@ -21,4 +21,4 @@ At runtime the desktop app prefers the bundled Node executable and runs:
 node pi-package/dist/cli.js --mode rpc --extension <mirror-server.ts> --no-approve
 ```
 
-During development pi-studio can still fall back to the globally installed `pi` command, or the executable pointed to by `PI_DESKTOP_CLI`.
+During development PiCode can still fall back to the globally installed `pi` command, or the executable pointed to by `PI_DESKTOP_CLI`.

@@ -42,7 +42,7 @@ self.addEventListener('fetch', (event) => {
         const cached = await caches.match(event.request);
         return (
           cached ||
-          new Response('pi-studio is offline. Start Pi to reconnect.', {
+          new Response('PiCode is offline. Start Pi to reconnect.', {
             status: 503,
             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           })

@@ -49,7 +49,7 @@ function Welcome() {
       <div className="welcome-mark">
         <img src="/icons/tau-192.png" alt="" className="tau-icon-welcome" />
       </div>
-      <span className="eyebrow">PI-STUDIO</span>
+      <span className="eyebrow">PiCode</span>
       <h1>从一个问题开始</h1>
       <p className="hint">与 Pi 协作理解代码、规划改动并完成任务。你也可以从左侧继续历史会话。</p>
       <div className="shortcuts-hint">

@@ -1103,7 +1103,7 @@ fn monitor_pi_process(app: AppHandle, pid: u32) {
                 let _ = app
                     .notification()
                     .builder()
-                    .title("pi-studio")
+                    .title("PiCode")
                     .body("Pi process exited")
                     .auto_cancel()
                     .show();

@@ -200,7 +200,7 @@ export class PiStudioController {
       this.refreshSessionsSoon(800);
       if (isDesktop) {
         void invoke('notify_desktop', {
-          request: { title: 'pi-studio', body: 'Pi 已启动，工作台连接成功。' },
+          request: { title: 'PiCode', body: 'Pi 已启动，工作台连接成功。' },
         }).catch(() => undefined);
       }
     } catch (error) {
@@ -234,7 +234,7 @@ export class PiStudioController {
 
   async addProject(): Promise<void> {
     if (!isDesktop) {
-      notify('桌面端功能', '添加本地项目仅在 pi-studio 桌面应用中可用。');
+      notify('桌面端功能', '添加本地项目仅在 PiCode 桌面应用中可用。');
       return;
     }
     const folder = await invoke<string | null>('pick_project_folder');
@@ -725,7 +725,7 @@ export class PiStudioController {
 
   async fetchProviderModels(provider: ModelsProviderConfig): Promise<ModelsProviderModel[]> {
     if (!isDesktop) {
-      notify('桌面端功能', '拉取模型仅在 pi-studio 桌面应用中可用。', 'warning');
+      notify('桌面端功能', '拉取模型仅在 PiCode 桌面应用中可用。', 'warning');
       return [];
     }
     try {
@@ -738,7 +738,7 @@ export class PiStudioController {
   }
 
   async testProviderModel(provider: ModelsProviderConfig, modelId: string, reasoningProfile?: string, thinkingLevel = 'off', thinkingLevelMap?: ModelsProviderModel['thinkingLevelMap']): Promise<string> {
-    if (!isDesktop) throw new Error('模型测试仅在 pi-studio 桌面应用中可用。');
+    if (!isDesktop) throw new Error('模型测试仅在 PiCode 桌面应用中可用。');
     const result = await invoke<{ output?: string }>('test_provider_model', {
       request: { provider, modelId, reasoningProfile, thinkingLevel, thinkingLevelMap },
     });
@@ -1167,7 +1167,7 @@ export class PiStudioController {
         return true;
       }
       case 'quit':
-        notify('提示', '请使用窗口关闭按钮退出 pi-studio', 'info');
+        notify('提示', '请使用窗口关闭按钮退出 PiCode', 'info');
         return true;
       // Extension commands, skills and prompt templates are forwarded to Pi via prompt().
       default:
@@ -1614,7 +1614,7 @@ export class PiStudioController {
       id: uniqueId('pi-ui'),
       streamingBehavior: 'followUp',
     };
-    if (!this.transport.send(request)) throw new Error('pi-studio 尚未连接到 Pi');
+    if (!this.transport.send(request)) throw new Error('PiCode 尚未连接到 Pi');
   }
 
   private async flushQueue(): Promise<void> {

@@ -1,6 +1,6 @@
 {
-  "name": "pi-studio",
-  "short_name": "pi-studio",
+  "name": "PiCode",
+  "short_name": "PiCode",
   "description": "React desktop workbench for the Pi coding agent",
   "start_url": "/",
   "display": "standalone",
