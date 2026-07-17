@@ -581,12 +581,16 @@ fn user_extensions_dir() -> Result<PathBuf, String> {
 }
 
 fn hidden_command(program: &str) -> Command {
-    let mut command = Command::new(program);
     #[cfg(windows)]
     {
+        let mut command = Command::new(program);
         command.creation_flags(CREATE_NO_WINDOW);
+        command
     }
-    command
+    #[cfg(not(windows))]
+    {
+        Command::new(program)
+    }
 }
 
 fn platform_binaries_dir() -> Result<&'static str, String> {

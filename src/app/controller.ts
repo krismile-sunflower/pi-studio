@@ -39,6 +39,7 @@ import {
   formatToolOutput,
   getMessageText,
   getMessageThinking,
+  getMessageToolCalls,
   modelIdFromValue,
   normalizeMessageText,
   samePath,
@@ -1261,7 +1262,17 @@ export class PiStudioController {
     if (message.role === 'assistant') {
       this.currentStreamingText = '';
       this.currentStreamingThinking = '';
-      this.currentStreamingId = this.appendMessage('assistant', '', { streaming: true });
+      this.recordMessageToolCalls(message);
+      const text = getMessageText(message);
+      const thinking = getMessageThinking(message);
+      // A tool-only assistant message has no prose to render. Creating an
+      // empty streaming message here used to leave a blank cursor/placeholder
+      // between the usage line and the actual tool execution.
+      this.currentStreamingId = text || thinking
+        ? this.appendMessage('assistant', text, { streaming: true, thinking })
+        : null;
+      this.currentStreamingText = text;
+      this.currentStreamingThinking = thinking;
       return;
     }
     if (message.role === 'user') {
@@ -1296,13 +1307,10 @@ export class PiStudioController {
   private handleMessageUpdate(event: RpcEvent): void {
     const update = event.assistantMessageEvent;
     if (!update) return;
+    this.recordMessageToolCalls(update.partial);
     if (!this.currentStreamingId) {
       this.currentStreamingText = getMessageText(update.partial);
       this.currentStreamingThinking = getMessageThinking(update.partial);
-      this.currentStreamingId = this.appendMessage('assistant', this.currentStreamingText, {
-        streaming: true,
-        thinking: this.currentStreamingThinking,
-      });
     }
 
     if (update.type === 'thinking_delta') {
@@ -1318,15 +1326,33 @@ export class PiStudioController {
       this.currentStreamingText =
         update.content || getMessageText(update.partial) || this.currentStreamingText;
     }
-    this.updateMessage(this.currentStreamingId, {
-      content: this.currentStreamingText,
-      thinking: this.currentStreamingThinking,
-      streaming: true,
-    });
+    if (!this.currentStreamingId && (this.currentStreamingText || this.currentStreamingThinking)) {
+      this.currentStreamingId = this.appendMessage('assistant', this.currentStreamingText, {
+        streaming: true,
+        thinking: this.currentStreamingThinking,
+      });
+    } else if (this.currentStreamingId) {
+      this.updateMessage(this.currentStreamingId, {
+        content: this.currentStreamingText,
+        thinking: this.currentStreamingThinking,
+        streaming: true,
+      });
+    }
   }
 
   private handleMessageEnd(message?: PiMessage): void {
     if (!message) return;
+    if (message.role === 'toolResult') {
+      if (message.toolCallId) {
+        this.updateTool(message.toolCallId, {
+          status: message.isError ? 'error' : 'complete',
+          output: formatToolOutput({ content: message.content }),
+          isError: Boolean(message.isError),
+        });
+      }
+      return;
+    }
+    if (message.role === 'assistant') this.recordMessageToolCalls(message);
     const error = assistantError(message);
     if (!this.currentStreamingId && message.role === 'assistant') {
       if (error) this.addError(error);
@@ -1808,8 +1834,35 @@ export class PiStudioController {
 
   private upsertTool(tool: ToolExecution): void {
     appStore.update((state) => ({
-      timeline: [...state.timeline, { id: tool.toolCallId, kind: 'tool', tool }],
+      timeline: state.timeline.some(
+        (item) => item.kind === 'tool' && item.tool.toolCallId === tool.toolCallId,
+      )
+        ? state.timeline.map((item) =>
+            item.kind === 'tool' && item.tool.toolCallId === tool.toolCallId
+              ? { ...item, tool: { ...item.tool, ...tool } }
+              : item,
+          )
+        : [...state.timeline, { id: tool.toolCallId, kind: 'tool', tool }],
     }));
+  }
+
+  /** Fallback for transports that only expose tool calls in assistant messages. */
+  private recordMessageToolCalls(message?: PiMessage): void {
+    for (const call of getMessageToolCalls(message)) {
+      const existing = appStore.getSnapshot().timeline.find(
+        (item) => item.kind === 'tool' && item.tool.toolCallId === call.id,
+      );
+      this.upsertTool({
+        toolCallId: call.id,
+        toolName: call.name,
+        args: call.args,
+        // Do not replace a completed event-driven card when the assistant
+        // message arrives late; this path only fills the event-stream gap.
+        status: existing?.kind === 'tool' ? existing.tool.status : 'streaming',
+        output: existing?.kind === 'tool' ? existing.tool.output : '',
+        isError: existing?.kind === 'tool' ? existing.tool.isError : undefined,
+      });
+    }
   }
 
   private updateTool(id: string, patch: Partial<ToolExecution>): void {

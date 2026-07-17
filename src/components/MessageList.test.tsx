@@ -56,7 +56,7 @@ describe('MessageList', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('连接失败');
   });
 
-  it('shows terminal commands and output inside the conversation', () => {
+  it('keeps completed terminal commands collapsed until opened', () => {
     const timeline: TimelineItem[] = [{
       id: 'bash-1',
       kind: 'tool',
@@ -69,10 +69,37 @@ describe('MessageList', () => {
       },
     }];
 
-    render(<MessageList timeline={timeline} streaming={false} />);
+    const { container } = render(<MessageList timeline={timeline} streaming={false} />);
 
+    expect(container.querySelector('.tool-card-body')).not.toHaveClass('expanded');
+    fireEvent.click(screen.getByRole('button', { name: /bash/ }));
+    expect(container.querySelector('.tool-card-body')).toHaveClass('expanded');
     expect(screen.getAllByText('pwd && ls')).toHaveLength(2);
     expect(screen.getByText(/README\.md/)).toBeVisible();
+  });
+
+  it('lets users copy their own messages', () => {
+    render(<MessageList timeline={[{
+      id: 'user-copy',
+      kind: 'message',
+      message: { id: 'user-copy', role: 'user', content: '请复制这条用户消息' },
+    }]} streaming={false} />);
+
+    expect(screen.getByRole('button', { name: '复制消息' })).toBeInTheDocument();
+  });
+
+  it('adds a right-side marker for every user conversation after the first one', () => {
+    const timeline: TimelineItem[] = [
+      { id: 'user-1', kind: 'message', message: { id: 'user-1', role: 'user', content: '先分析这个项目' } },
+      { id: 'assistant-1', kind: 'message', message: { id: 'assistant-1', role: 'assistant', content: '好的。' } },
+      { id: 'user-2', kind: 'message', message: { id: 'user-2', role: 'user', content: '接着检查测试' } },
+    ];
+
+    render(<MessageList timeline={timeline} streaming={false} />);
+
+    expect(screen.getByRole('navigation', { name: '对话快速定位' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /跳转到用户消息 1：先分析这个项目/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /跳转到用户消息 2：接着检查测试/ })).toBeInTheDocument();
   });
 
   it('renders command permission requests inline and returns the selected allowance', () => {

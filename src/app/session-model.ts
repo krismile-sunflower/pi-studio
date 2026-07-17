@@ -13,6 +13,7 @@ import {
   formatToolOutput,
   getMessageText,
   getMessageThinking,
+  getMessageToolCalls,
   modelIdFromValue,
   totalInputTokens,
 } from '../lib/utils';
@@ -168,15 +169,11 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
       if (message.usage && totalInputTokens(message.usage) > 0) lastUsage = message.usage;
 
       if (Array.isArray(message.content)) {
-        for (const block of message.content) {
-          if (block.type !== 'toolCall' || !('id' in block) || !('name' in block)) continue;
+        for (const call of getMessageToolCalls(message)) {
           const tool: ToolExecution = {
-            toolCallId: String(block.id),
-            toolName: String(block.name),
-            args:
-              'arguments' in block && block.arguments && typeof block.arguments === 'object'
-                ? (block.arguments as Record<string, unknown>)
-                : {},
+            toolCallId: call.id,
+            toolName: call.name,
+            args: call.args,
             status: 'complete',
             output: '',
             history: true,

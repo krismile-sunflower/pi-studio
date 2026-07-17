@@ -1,5 +1,11 @@
 import type { MessageContentBlock, PiMessage, Usage } from './types';
 
+export interface MessageToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
 export function uniqueId(prefix = 'item'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -33,6 +39,35 @@ export function getMessageThinking(message?: PiMessage | null): string {
     .filter((block) => block.type === 'thinking')
     .map((block) => ('thinking' in block ? String(block.thinking || '') : ''))
     .join('\n');
+}
+
+/**
+ * Pi stores tool calls inside assistant message content.  The live RPC stream
+ * normally also emits tool_execution events, but not every transport/provider
+ * forwards those events.  Keep this parser in one place so history and live
+ * rendering can both fall back to the message payload.
+ */
+export function getMessageToolCalls(message?: PiMessage | null): MessageToolCall[] {
+  if (!message || !Array.isArray(message.content)) return [];
+
+  return message.content.flatMap((block) => {
+    if (block.type !== 'toolCall' || !('id' in block) || !('name' in block)) return [];
+    const rawArguments = 'arguments' in block ? block.arguments : undefined;
+    let args: Record<string, unknown> = {};
+    if (rawArguments && typeof rawArguments === 'object' && !Array.isArray(rawArguments)) {
+      args = rawArguments as Record<string, unknown>;
+    } else if (typeof rawArguments === 'string' && rawArguments.trim()) {
+      try {
+        const parsed = JSON.parse(rawArguments);
+        args = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : { input: rawArguments };
+      } catch {
+        args = { input: rawArguments };
+      }
+    }
+    return [{ id: String(block.id), name: String(block.name), args }];
+  });
 }
 
 export function normalizeMessageText(text: string): string {

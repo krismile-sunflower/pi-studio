@@ -319,6 +319,7 @@ body.hide-thinking .thinking-block { display: none; }
 /* Tool execution */
 .tool-card {
   width: 100%;
+  flex-shrink: 0;
   margin: 3px 0;
   overflow: hidden;
   border: 1px solid var(--border);

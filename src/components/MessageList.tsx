@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionUiRequest, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
 import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
 import { formatTokens } from '../lib/utils';
@@ -92,11 +92,13 @@ function MessageItem({
   editable,
   onDelete,
   onEdit,
+  onElementRef,
 }: {
   message: RenderedMessage;
   editable?: boolean;
   onDelete?(entryId: string): Promise<boolean>;
   onEdit?(message: RenderedMessage): void;
+  onElementRef?(element: HTMLDivElement | null): void;
 }) {
   const [deleting, setDeleting] = useState(false);
   if (message.role === 'system' && message.content === '__PI_STUDIO_WELCOME__') return <Welcome />;
@@ -106,8 +108,13 @@ function MessageItem({
   const hasUsage = Boolean(usageText(message.usage));
   const canDelete = Boolean(onDelete && message.history && message.sessionEntryId && !message.streaming);
   const canEdit = Boolean(editable && onEdit && message.history && message.sessionEntryId && !message.streaming);
+  const canCopy = Boolean(
+    !message.streaming &&
+    message.content &&
+    (message.role === 'assistant' || message.role === 'user'),
+  );
   return (
-    <div className={`message ${message.role}${message.history ? ' history' : ''}`} data-message-id={message.id}>
+    <div ref={onElementRef} className={`message ${message.role}${message.history ? ' history' : ''}`} data-message-id={message.id}>
       <div className={`message-content${message.streaming ? ' streaming' : ''}`}>
         {message.role === 'assistant' && message.thinking ? (
           <ThinkingBlock content={message.thinking} streaming={message.streaming} />
@@ -130,9 +137,9 @@ function MessageItem({
           <span className={message.streaming ? 'streaming-text' : undefined}>{message.content}</span>
         )}
       </div>
-      {(message.role === 'assistant' && !message.streaming) || canDelete || canEdit ? (
+      {canCopy || canDelete || canEdit ? (
         <div className="message-actions">
-          {message.role === 'assistant' && !message.streaming ? <CopyMessageButton text={message.content} /> : null}
+          {canCopy ? <CopyMessageButton text={message.content} /> : null}
           {canEdit ? (
             <button className="message-edit-btn" type="button" aria-label="重新编辑这条消息" title="重新编辑并发送" onClick={() => onEdit?.(message)}>
               <Icon name="edit" width={12} height={12} />
@@ -178,7 +185,7 @@ function isTerminalToolName(name: string): boolean {
 function ToolCard({ tool }: { tool: ToolExecution }) {
   const terminalTool = isTerminalToolName(tool.toolName);
   const command = terminalTool ? argumentPreview(tool.args) : '';
-  const [expanded, setExpanded] = useState(terminalTool || tool.status === 'pending' || tool.status === 'streaming');
+  const [expanded, setExpanded] = useState(tool.status === 'pending' || tool.status === 'streaming');
   const statusLabel = {
     pending: '等待中',
     streaming: '执行中',
@@ -192,8 +199,8 @@ function ToolCard({ tool }: { tool: ToolExecution }) {
 
   useEffect(() => {
     if (tool.status === 'streaming') setExpanded(true);
-    if (tool.status === 'complete' && !tool.isError && !terminalTool) setExpanded(false);
-  }, [terminalTool, tool.isError, tool.status]);
+    if (tool.status === 'complete' && !tool.isError) setExpanded(false);
+  }, [tool.isError, tool.status]);
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -353,6 +360,16 @@ function timelineFingerprint(timeline: TimelineItem[]): string {
   return `${timeline.length}:${timeline[0]?.id || ''}:${timeline[timeline.length - 1]?.id || ''}`;
 }
 
+function conversationLabel(message: RenderedMessage, index: number): string {
+  const preview = message.content.replace(/\s+/g, ' ').trim();
+  return preview ? `跳转到用户消息 ${index + 1}：${preview.slice(0, 48)}` : `跳转到用户消息 ${index + 1}`;
+}
+
+function conversationPreview(message: RenderedMessage): string {
+  const preview = message.content.replace(/\s+/g, ' ').trim();
+  return preview.length > 56 ? `${preview.slice(0, 56)}…` : preview || '空白用户消息';
+}
+
 export function MessageList({
   timeline,
   streaming,
@@ -371,6 +388,7 @@ export function MessageList({
   onRespondToExtension?(request: ExtensionUiRequest, response: Record<string, unknown>): void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const conversationNodes = useRef(new Map<string, HTMLDivElement>());
   const [scrolledUp, setScrolledUp] = useState(false);
   const [newMessage, setNewMessage] = useState(false);
   const previousCount = useRef(timeline.length);
@@ -382,6 +400,38 @@ export function MessageList({
     () => [...timeline].reverse().find((item) => item.kind === 'message' && item.message.role === 'user')?.id,
     [timeline],
   );
+  const conversationAnchors = useMemo(
+    () => timeline.flatMap((item) => item.kind === 'message' && item.message.role === 'user' ? [item.message] : []),
+    [timeline],
+  );
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [conversationPositions, setConversationPositions] = useState<Record<string, number>>({});
+
+  const registerConversationNode = useCallback((id: string, node: HTMLDivElement | null) => {
+    if (node) conversationNodes.current.set(id, node);
+    else conversationNodes.current.delete(id);
+  }, []);
+
+  const updateConversationPositions = useCallback(() => {
+    const container = containerRef.current;
+    if (!container || !conversationAnchors.length) return;
+    const scrollRange = Math.max(1, container.scrollHeight - 1);
+    const next: Record<string, number> = {};
+    for (const message of conversationAnchors) {
+      const node = conversationNodes.current.get(message.id);
+      if (!node) continue;
+      next[message.id] = Math.min(1, Math.max(0, node.offsetTop / scrollRange));
+    }
+    setConversationPositions((current) => {
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      if (
+        currentKeys.length === nextKeys.length &&
+        nextKeys.every((id) => Math.abs((current[id] ?? -1) - next[id]!) < 0.001)
+      ) return current;
+      return next;
+    });
+  }, [conversationAnchors]);
 
   // Keep scroll stable across session switches / history replace.
   useLayoutEffect(() => {
@@ -420,6 +470,54 @@ export function MessageList({
     container.scrollTop = container.scrollHeight;
   }, [permissionRequestKey]);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let frame = window.requestAnimationFrame(updateConversationPositions);
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateConversationPositions);
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMeasure);
+    observer?.observe(container);
+    for (const node of conversationNodes.current.values()) observer?.observe(node);
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, [conversationAnchors, updateConversationPositions]);
+
+  useEffect(() => {
+    if (!conversationAnchors.length) {
+      setActiveConversationId(null);
+      return;
+    }
+    setActiveConversationId((current) =>
+      conversationAnchors.some((message) => message.id === current)
+        ? current
+        : conversationAnchors[conversationAnchors.length - 1]?.id || null,
+    );
+  }, [conversationAnchors]);
+
+  const scrollToConversation = (id: string) => {
+    const container = containerRef.current;
+    const target = conversationNodes.current.get(id);
+    if (!container || !target) return;
+    // The workspace header overlays the scroll area. Keep the selected user
+    // message below it rather than pinning it underneath the header on upward jumps.
+    const headerHeight = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--header-height'),
+    ) || 58;
+    const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - headerHeight - 20;
+    container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    stickToBottom.current = false;
+    setScrolledUp(true);
+    setNewMessage(false);
+    setActiveConversationId(id);
+  };
+
   return (
     <div className={`chat-messages-wrap${switching ? ' is-switching' : ''}`}>
       {switching ? (
@@ -440,11 +538,28 @@ export function MessageList({
           stickToBottom.current = !isUp;
           setScrolledUp(isUp);
           if (!isUp) setNewMessage(false);
+          const threshold = container.getBoundingClientRect().top + container.clientHeight * 0.32;
+          let currentAnchor = conversationAnchors[0]?.id || null;
+          for (const message of conversationAnchors) {
+            const node = conversationNodes.current.get(message.id);
+            if (node && node.getBoundingClientRect().top <= threshold) currentAnchor = message.id;
+          }
+          // Before the first anchor crosses the reading threshold (the common
+          // case when scrolling all the way up), keep the first conversation
+          // selected instead of leaving the previous lower conversation active.
+          setActiveConversationId(currentAnchor);
         }}
       >
         {timeline.map((item) =>
           item.kind === 'message' ? (
-            <MessageItem key={item.id} message={item.message} editable={item.id === lastUserMessageId && !streaming} onDelete={onDeleteMessage} onEdit={onEditMessage} />
+            <MessageItem
+              key={item.id}
+              message={item.message}
+              editable={item.id === lastUserMessageId && !streaming}
+              onDelete={onDeleteMessage}
+              onEdit={onEditMessage}
+              onElementRef={item.message.role === 'user' ? (node) => registerConversationNode(item.message.id, node) : undefined}
+            />
           ) : (
             <ToolCard key={item.id} tool={item.tool} />
           ),
@@ -453,6 +568,24 @@ export function MessageList({
           <PermissionRequestCard request={permissionRequest} onRespond={onRespondToExtension} />
         ) : null}
       </div>
+      {conversationAnchors.length > 1 ? (
+        <nav className="conversation-minimap" aria-label="对话快速定位">
+          {conversationAnchors.map((message, index) => (
+            <button
+              key={message.id}
+              className={`conversation-marker${message.id === activeConversationId ? ' active' : ''}`}
+              type="button"
+              aria-label={conversationLabel(message, index)}
+              aria-current={message.id === activeConversationId ? 'true' : undefined}
+              style={{ top: `${4 + (conversationPositions[message.id] ?? (index + 0.5) / conversationAnchors.length) * 92}%` }}
+              onClick={() => scrollToConversation(message.id)}
+            >
+              <span className="conversation-marker-line" aria-hidden="true" />
+              <span className="conversation-marker-tooltip" role="tooltip">{conversationPreview(message)}</span>
+            </button>
+          ))}
+        </nav>
+      ) : null}
       <button
         className={`scroll-bottom-btn${scrolledUp ? '' : ' hidden'}`}
         type="button"

@@ -75,6 +75,26 @@ describe('session model', () => {
     expect(tool?.id).toBe('history-0-tool-tool-1');
   });
 
+  it('keeps tool calls whose arguments arrive as a JSON string', () => {
+    const result = buildHistoryTimeline([
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'tool-json', name: 'read', arguments: '{"path":"src/main.tsx"}' },
+          ],
+        },
+      },
+    ]);
+
+    const tool = result.timeline.find((item) => item.kind === 'tool');
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      tool: { toolCallId: 'tool-json', toolName: 'read', args: { path: 'src/main.tsx' } },
+    });
+  });
+
   it('produces identical ids for the same history payload', () => {
     const entries: SessionEntry[] = [
       {
