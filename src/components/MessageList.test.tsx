@@ -56,6 +56,27 @@ describe('MessageList', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('连接失败');
   });
 
+  it('shows non-overlapping request usage fields', () => {
+    render(<MessageList timeline={[{
+      id: 'assistant-usage',
+      kind: 'message',
+      message: {
+        id: 'assistant-usage',
+        role: 'assistant',
+        content: '完成',
+        usage: {
+          input: 6_507,
+          output: 1_643,
+          cacheRead: 20_224,
+          cacheWrite: 0,
+          totalTokens: 28_374,
+        },
+      },
+    }]} streaming={false} />);
+
+    expect(screen.getByText('输入 6.5k / 输出 1.6k / 缓存读取 20.2k / 总计 28.4k')).toBeInTheDocument();
+  });
+
   it('renders streamed assistant content as Markdown before the response completes', () => {
     render(<MessageList timeline={[{
       id: 'streaming-markdown',

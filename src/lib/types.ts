@@ -57,7 +57,23 @@ export interface Usage {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Pi reports this separately for Anthropic's one-hour cache retention. */
+  cacheWrite1h?: number;
+  /** Included in output when a provider exposes a reasoning-token breakdown. */
+  reasoning?: number;
+  /** The provider's full context total, when it is available. */
+  totalTokens?: number;
   cost?: UsageCost;
+}
+
+/**
+ * Current context estimate reported by Pi. Tokens may be unknown immediately
+ * after compaction, until Pi receives the next model response.
+ */
+export interface ContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
 }
 
 export interface PiMessage {
@@ -382,6 +398,7 @@ export interface TransportEnvelope {
   sessionFile?: string;
   model?: ModelInfo | string;
   thinkingLevel?: ThinkingLevel;
+  contextUsage?: ContextUsage | null;
   [key: string]: unknown;
 }
 
@@ -443,6 +460,8 @@ export interface AppSnapshot {
   thinkingLevel: ThinkingLevel;
   thinkingSupported: boolean;
   contextWindowSize: number;
+  /** Undefined means the active Pi runtime did not provide an estimate yet. */
+  contextUsage?: ContextUsage;
   lastUsage: Usage | null;
   sessionTotalCost: number;
   queue: Array<{ id: string; message: string; images?: ImageAttachment[] }>;

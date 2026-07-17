@@ -28,6 +28,7 @@ const initialSnapshot: AppSnapshot = {
   thinkingLevel: 'off',
   thinkingSupported: true,
   contextWindowSize: 0,
+  contextUsage: undefined,
   lastUsage: null,
   sessionTotalCost: 0,
   queue: [],
@@ -91,6 +92,7 @@ export class AppStore {
     this.update({
       timeline: [],
       isStreaming: false,
+      contextUsage: undefined,
       lastUsage: null,
       sessionTotalCost: 0,
       queue: [],

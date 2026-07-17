@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionUiRequest, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
 import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
-import { formatTokens } from '../lib/utils';
+import { formatTokens, totalContextTokens } from '../lib/utils';
 import { Icon } from './Icon';
 import { CopyMessageButton, Markdown } from './Markdown';
 
@@ -11,12 +11,15 @@ function usageText(usage?: Usage): string {
   const output = usage.output || 0;
   const cacheRead = usage.cacheRead || 0;
   const cacheWrite = usage.cacheWrite || 0;
-  const total = input + output + cacheRead + cacheWrite;
-  const cache = cacheRead || cacheWrite ? ` / 缓存 ${formatTokens(cacheRead + cacheWrite)}` : '';
-  const tokens = `输入 ${formatTokens(input + cacheRead)} / 输出 ${formatTokens(output)}${cache}`;
-  return usage.cost?.total
-    ? `$${usage.cost.total.toFixed(4)} · ${tokens}`
-    : `${tokens} / 总计 ${formatTokens(total)}`;
+  const total = totalContextTokens(usage);
+  const parts = [
+    `输入 ${formatTokens(input)}`,
+    `输出 ${formatTokens(output)}`,
+    ...(cacheRead ? [`缓存读取 ${formatTokens(cacheRead)}`] : []),
+    ...(cacheWrite ? [`缓存写入 ${formatTokens(cacheWrite)}`] : []),
+    `总计 ${formatTokens(total)}`,
+  ];
+  return `${usage.cost?.total ? `$${usage.cost.total.toFixed(4)} · ` : ''}${parts.join(' / ')}`;
 }
 
 function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {

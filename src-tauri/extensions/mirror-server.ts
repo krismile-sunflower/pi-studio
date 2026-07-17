@@ -856,6 +856,8 @@ export default function (pi: ExtensionAPI) {
             assistantMessages,
             toolCalls,
             totalMessages: entries.length,
+            contextUsage: usage || null,
+            // Legacy field retained for older PiCode clients.
             tokens: usage ? { input: usage.tokens, total: usage.tokens } : null,
           }));
           break;

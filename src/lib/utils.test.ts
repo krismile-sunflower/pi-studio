@@ -6,7 +6,9 @@ import {
   getMessageThinking,
   normalizeMessageText,
   samePath,
-  totalInputTokens,
+  normalizeContextUsage,
+  totalContextTokens,
+  totalPromptTokens,
 } from './utils';
 
 describe('frontend protocol utilities', () => {
@@ -32,7 +34,23 @@ describe('frontend protocol utilities', () => {
   it('formats usage values consistently', () => {
     expect(formatTokens(999)).toBe('999');
     expect(formatTokens(1500)).toBe('1.5k');
-    expect(totalInputTokens({ input: 20, cacheRead: 80 })).toBe(100);
+    expect(totalPromptTokens({ input: 20, cacheRead: 80, cacheWrite: 5 })).toBe(105);
+    expect(totalContextTokens({ input: 20, output: 10, cacheRead: 80, cacheWrite: 5 })).toBe(115);
+    expect(totalContextTokens({ input: 20, output: 10, totalTokens: 101 })).toBe(101);
     expect(normalizeMessageText('  hello\n world  ')).toBe('hello world');
+  });
+
+  it('keeps Pi context estimates typed, including the unknown state after compaction', () => {
+    expect(normalizeContextUsage({ tokens: null, contextWindow: 500_000, percent: null })).toEqual({
+      tokens: null,
+      contextWindow: 500_000,
+      percent: null,
+    });
+    expect(normalizeContextUsage({ tokens: 28_474, contextWindow: 500_000, percent: 5.6948 })).toEqual({
+      tokens: 28_474,
+      contextWindow: 500_000,
+      percent: 5.6948,
+    });
+    expect(normalizeContextUsage({ tokens: '28k' })).toBeUndefined();
   });
 });

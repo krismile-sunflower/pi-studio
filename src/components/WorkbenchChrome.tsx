@@ -19,7 +19,7 @@ import type {
   ToastMessage,
 } from '../lib/types';
 import { isPermissionRequest } from '../lib/extension-ui';
-import { basename, formatTokens, shortModelName, totalInputTokens, uniqueId } from '../lib/utils';
+import { basename, formatTokens, shortModelName, totalContextTokens, uniqueId } from '../lib/utils';
 import {
   applySlashCompletion,
   fuzzyFilterCommands,
@@ -81,9 +81,17 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
     return !query || `${model.id} ${model.name || ''}`.toLowerCase().includes(query);
   });
   const usage = snapshot.lastUsage;
-  const used = totalInputTokens(usage);
-  const total = snapshot.contextWindowSize;
-  const percent = total > 0 && used > 0 ? Math.round((used / total) * 100) : 0;
+  const latestContextTokens = totalContextTokens(usage);
+  const hasReportedContext = snapshot.contextUsage !== undefined;
+  const reportedTokens = snapshot.contextUsage?.tokens;
+  const contextKnown = reportedTokens != null || (!hasReportedContext && latestContextTokens > 0);
+  const used = reportedTokens ?? (hasReportedContext ? 0 : latestContextTokens);
+  const total = snapshot.contextUsage?.contextWindow || snapshot.contextWindowSize;
+  const percent = total > 0 && contextKnown
+    ? Math.round((used / total) * 100)
+    : snapshot.contextUsage?.percent != null
+      ? Math.round(snapshot.contextUsage.percent)
+      : 0;
   const workspaceTitle = snapshot.workspace.noFolder
     ? 'PiCode 专属目录'
     : snapshot.workspace.path || '工作区';
@@ -91,10 +99,23 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
     ? 'Pi 正在处理…'
     : ({ connected: '已连接', connecting: '正在启动 Pi…', disconnected: '连接已断开', idle: '未打开项目' } as const)[snapshot.connection];
   const currentModelLabel = shortModelName(snapshot.currentModelId) || '模型';
-  const segments = usage && total
+  const detailSegments = usage
     ? [
-        { key: 'cache', label: '缓存', tokens: usage.cacheRead || 0 },
+        { key: 'cache', label: '缓存读取', tokens: usage.cacheRead || 0 },
         { key: 'messages', label: '输入', tokens: usage.input || 0 },
+        { key: 'output', label: '输出', tokens: usage.output || 0 },
+        { key: 'cache-write', label: '缓存写入', tokens: usage.cacheWrite || 0 },
+      ].filter((segment) => segment.tokens > 0)
+    : [];
+  const detailedTokens = detailSegments.reduce((sum, segment) => sum + segment.tokens, 0);
+  const canShowDetails = detailedTokens > 0 && detailedTokens <= used;
+  const estimatedTokens = canShowDetails ? Math.max(0, used - detailedTokens) : used;
+  const segments = contextKnown && total
+    ? [
+        ...(canShowDetails ? detailSegments : []),
+        ...(estimatedTokens > 0
+          ? [{ key: 'estimated', label: canShowDetails ? '会话增量（估算）' : '已用（估算）', tokens: estimatedTokens }]
+          : []),
         { key: 'free', label: '可用', tokens: Math.max(0, total - used) },
       ]
     : [];
@@ -160,7 +181,7 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
         <div className="session-metrics" ref={metricsRef}>
           <button className="session-metrics-trigger" type="button" title="查看会话上下文" onClick={() => setMetricsOpen((value) => !value)}>
             <Icon name="chart" />
-            {used > 0 ? <span className={`pill token-usage visible${percent >= 80 ? ' critical' : percent >= 60 ? ' warning' : ''}`}>{total ? (percent === 0 ? '<1%' : `${percent}%`) : formatTokens(used)}</span> : null}
+            {contextKnown && used > 0 ? <span className={`pill token-usage visible${percent >= 80 ? ' critical' : percent >= 60 ? ' warning' : ''}`}>{total ? (percent === 0 ? '<1%' : `${percent}%`) : formatTokens(used)}</span> : null}
             {snapshot.sessionTotalCost > 0 ? <span className="pill session-cost visible">${snapshot.sessionTotalCost.toFixed(4)}</span> : null}
           </button>
           {metricsOpen ? (
@@ -168,12 +189,12 @@ export function Header({ snapshot, onOpenSidebar, fileOpen, onToggleFiles }: Hea
               <div className="context-viz-title">会话上下文</div>
               {segments.length ? (
                 <>
-                  <div className="context-bar">{segments.filter((segment) => segment.tokens > 0).map((segment) => <div className={`context-bar-segment ${segment.key}`} style={{ width: `${(segment.tokens / total) * 100}%` }} title={`${segment.label}: ${formatTokens(segment.tokens)}`} key={segment.key} />)}</div>
+                  <div className="context-bar">{segments.filter((segment) => segment.tokens > 0).map((segment) => <div className={`context-bar-segment ${segment.key}`} style={{ width: `${Math.min(100, (segment.tokens / total) * 100)}%` }} title={`${segment.label}: ${formatTokens(segment.tokens)}`} key={segment.key} />)}</div>
                   <div className="context-legend">{segments.map((segment) => <div className="context-legend-item" key={segment.key}><span className="context-legend-left"><span className={`context-legend-dot ${segment.key}`} />{segment.label}</span><span className="context-legend-value">{formatTokens(segment.tokens)}</span></div>)}</div>
                   <div className="context-viz-footer"><span>已使用 {percent}%</span><span>{formatTokens(used)} / {formatTokens(total)}</span></div>
                   {percent >= 80 ? <button className="compact-btn" type="button" onClick={() => void controller.compact()}>压缩上下文</button> : null}
                 </>
-              ) : <div className="context-viz-footer"><span>尚无用量数据</span></div>}
+              ) : <div className="context-viz-footer"><span>{hasReportedContext && reportedTokens == null ? '压缩后等待下一次回复确认' : '尚无用量数据'}</span></div>}
             </div>
           ) : null}
         </div>

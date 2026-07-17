@@ -38,14 +38,16 @@ import type {
 } from '../lib/types';
 import {
   basename,
+  formatTokens,
   formatToolOutput,
   getMessageText,
   getMessageThinking,
   getMessageToolCalls,
   modelIdFromValue,
+  normalizeContextUsage,
   normalizeMessageText,
   samePath,
-  totalInputTokens,
+  totalContextTokens,
   uniqueId,
 } from '../lib/utils';
 import { mergeSlashCommands } from '../lib/slash-commands';
@@ -335,6 +337,7 @@ export class PiStudioController {
       selectedSessionFile: session.filePath,
       selectedSessionTitle: session.name || session.firstMessage || session.file || '当前会话',
       sessionTotalCost: 0,
+      contextUsage: undefined,
       lastUsage: null,
       isStreaming: false,
       queue: [],
@@ -377,6 +380,7 @@ export class PiStudioController {
         activeSessionFile: sessionFile,
         selectedSessionTitle: '新会话',
         sessionTotalCost: 0,
+        contextUsage: undefined,
         lastUsage: null,
         view: 'chat',
         sessionSwitching: false,
@@ -514,13 +518,31 @@ export class PiStudioController {
     );
     if (!result.success || !result.data) return;
     const stats = result.data;
-    const tokens = stats.tokens as { input?: number } | undefined;
+    const reportedContext = normalizeContextUsage(stats.contextUsage);
+    const legacyTokens = stats.tokens as { input?: unknown; total?: unknown } | undefined;
+    const legacyContextTokens = legacyTokens?.total ?? legacyTokens?.input;
+    const contextTokens = reportedContext
+      ? reportedContext.tokens
+      : typeof legacyContextTokens === 'number' && Number.isFinite(legacyContextTokens)
+        ? legacyContextTokens
+        : null;
+    const contextWindow = reportedContext?.contextWindow || appStore.getSnapshot().contextWindowSize;
+    const contextPercent = contextTokens != null && contextWindow > 0
+      ? Math.round((contextTokens / contextWindow) * 100)
+      : reportedContext?.percent != null
+        ? Math.round(reportedContext.percent)
+        : null;
+    if (reportedContext) appStore.update({ contextUsage: reportedContext });
     const lines = [
       '会话统计',
       `消息：${stats.totalMessages || 0} 条（用户 ${stats.userMessages || 0}，助手 ${stats.assistantMessages || 0}）`,
       `工具调用：${stats.toolCalls || 0} 次`,
     ];
-    if (tokens?.input) lines.push(`上下文：约 ${(tokens.input / 1000).toFixed(1)}k Token`);
+    if (contextTokens != null) {
+      const total = contextWindow > 0 ? ` / ${formatTokens(contextWindow)}` : '';
+      const percent = contextPercent != null ? `（${contextPercent}%）` : '';
+      lines.push(`上下文：约 ${formatTokens(contextTokens)}${total} Token${percent}`);
+    }
     this.appendMessage('system', lines.join('\n'));
   }
 
@@ -1478,7 +1500,12 @@ export class PiStudioController {
     }
 
     const selectedFile = state.selectedSessionFile || activeFile;
-    appStore.update({ activeSessionFile: activeFile, selectedSessionFile: selectedFile });
+    const contextUsage = normalizeContextUsage(snapshot.contextUsage);
+    appStore.update({
+      activeSessionFile: activeFile,
+      selectedSessionFile: selectedFile,
+      ...(contextUsage ? { contextUsage } : {}),
+    });
 
     const model = resolveModel(snapshot.model, appStore.getSnapshot().models);
     if (model) {
@@ -1519,6 +1546,7 @@ export class PiStudioController {
             timeline: [],
             sessionTotalCost: 0,
             lastUsage: null,
+            contextUsage: undefined,
             sessionSwitching: false,
           });
           this.addWelcome();
@@ -1557,6 +1585,7 @@ export class PiStudioController {
         timeline: [],
         sessionTotalCost: 0,
         lastUsage: null,
+        contextUsage: undefined,
         sessionSwitching: false,
       });
       this.addWelcome();
@@ -1937,7 +1966,7 @@ export class PiStudioController {
   private rememberUsage(usage?: Usage): void {
     if (!usage) return;
     appStore.update((state) => ({
-      lastUsage: totalInputTokens(usage) > 0 ? usage : state.lastUsage,
+      lastUsage: totalContextTokens(usage) > 0 ? usage : state.lastUsage,
       sessionTotalCost: state.sessionTotalCost + (usage.cost?.total || 0),
     }));
   }

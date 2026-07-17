@@ -15,7 +15,7 @@ import {
   getMessageThinking,
   getMessageToolCalls,
   modelIdFromValue,
-  totalInputTokens,
+  totalContextTokens,
 } from '../lib/utils';
 
 export function instanceTransport(instance?: PiInstance | null): 'rpc' | 'mirror' {
@@ -166,7 +166,7 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
         });
       }
       if (message.usage?.cost?.total) sessionTotalCost += message.usage.cost.total;
-      if (message.usage && totalInputTokens(message.usage) > 0) lastUsage = message.usage;
+      if (message.usage && totalContextTokens(message.usage) > 0) lastUsage = message.usage;
 
       if (Array.isArray(message.content)) {
         for (const call of getMessageToolCalls(message)) {

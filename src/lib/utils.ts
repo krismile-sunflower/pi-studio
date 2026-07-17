@@ -1,4 +1,4 @@
-import type { MessageContentBlock, PiMessage, Usage } from './types';
+import type { ContextUsage, MessageContentBlock, PiMessage, Usage } from './types';
 
 export interface MessageToolCall {
   id: string;
@@ -80,8 +80,38 @@ export function formatTokens(value: number): string {
   return String(value);
 }
 
-export function totalInputTokens(usage?: Usage | null): number {
-  return (usage?.input || 0) + (usage?.cacheRead || 0);
+/** Tokens sent in a request before the model starts generating. */
+export function totalPromptTokens(usage?: Usage | null): number {
+  return (usage?.input || 0) + (usage?.cacheRead || 0) + (usage?.cacheWrite || 0);
+}
+
+/**
+ * Context size represented by one completed model response. Pi's totalTokens
+ * already includes output; otherwise derive the same non-overlapping total.
+ */
+export function totalContextTokens(usage?: Usage | null): number {
+  const reported = usage?.totalTokens;
+  if (typeof reported === 'number' && Number.isFinite(reported) && reported > 0) return reported;
+  return totalPromptTokens(usage) + (usage?.output || 0);
+}
+
+/** Safely accepts context snapshots from either the mirror or native RPC transport. */
+export function normalizeContextUsage(value: unknown): ContextUsage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const numberValue = (candidate: unknown): number | undefined =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0
+      ? candidate
+      : undefined;
+  const tokens = numberValue(usage.tokens);
+  const contextWindow = numberValue(usage.contextWindow);
+  const percent = numberValue(usage.percent);
+  if (tokens === undefined && contextWindow === undefined && percent === undefined) return undefined;
+  return {
+    tokens: tokens ?? null,
+    contextWindow: contextWindow ?? 0,
+    percent: percent ?? null,
+  };
 }
 
 export function formatRelativeTime(value?: string | number): string {
