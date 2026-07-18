@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 
 // pnpm forwards a few of its own legacy settings as NPM_CONFIG_* variables.
 // npm 11 reports them as unknown, although they do not affect this install.
@@ -11,9 +13,34 @@ for (const key of [
   delete environment[key];
 }
 
-const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', process.argv.slice(2), {
+// Node 20+ on Windows rejects spawning .cmd/.bat without shell (EINVAL).
+// Invoke npm-cli.js through node so we never need shell:true.
+function resolveNpmSpawn() {
+  const args = process.argv.slice(2);
+  if (process.platform !== 'win32') {
+    return { command: 'npm', args };
+  }
+
+  const npmCli = path.join(
+    path.dirname(process.execPath),
+    'node_modules',
+    'npm',
+    'bin',
+    'npm-cli.js',
+  );
+  if (existsSync(npmCli)) {
+    return { command: process.execPath, args: [npmCli, ...args] };
+  }
+
+  // Fallback for unusual installs where npm is not next to node.exe.
+  return { command: 'npm.cmd', args, shell: true };
+}
+
+const { command, args, shell = false } = resolveNpmSpawn();
+const child = spawn(command, args, {
   env: environment,
   stdio: 'inherit',
+  shell,
 });
 
 child.once('error', (error) => {
