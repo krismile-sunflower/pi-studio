@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { TimelineItem } from '../lib/types';
+import type { PlanSessionState, TimelineItem } from '../lib/types';
 import { MessageList } from './MessageList';
 
 describe('MessageList', () => {
@@ -37,7 +37,7 @@ describe('MessageList', () => {
 
     render(<MessageList timeline={timeline} streaming={false} />);
 
-    expect(screen.getByRole('heading', { name: '从一个问题开始' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '把想法变成下一步行动。' })).toBeInTheDocument();
     expect(screen.getByText('完成')).toBeInTheDocument();
     expect(screen.getByText('思考过程')).toBeInTheDocument();
     expect(screen.getByText('read')).toBeInTheDocument();
@@ -180,5 +180,43 @@ describe('MessageList', () => {
 
     expect(screen.getByRole('region', { name: 'Pi 工具执行授权' })).toHaveTextContent('允许 Pi 修改文件？');
     expect(screen.getByText('src/app/App.tsx')).toBeInTheDocument();
+  });
+
+  it('renders a reviewable plan and disables its actions while streaming', () => {
+    const onEdit = vi.fn();
+    const onContinue = vi.fn();
+    const onExecute = vi.fn();
+    const plan: PlanSessionState = {
+      phase: 'review',
+      goal: 'Implement a session-scoped planning workflow',
+      steps: [
+        { id: 'state', title: 'Persist the state', detail: 'Use a Pi custom entry.', status: 'pending' },
+        { id: 'ui', title: 'Render the review card', status: 'pending' },
+      ],
+      updatedAt: '2026-07-30T13:00:00.000Z',
+    };
+
+    const { rerender } = render(
+      <MessageList
+        timeline={[]}
+        streaming={false}
+        plan={plan}
+        onEditPlan={onEdit}
+        onContinuePlan={onContinue}
+        onExecutePlan={onExecute}
+      />,
+    );
+
+    expect(screen.getByRole('region', { name: '计划审阅' })).toHaveTextContent('Implement a session-scoped planning workflow');
+    fireEvent.click(screen.getByRole('button', { name: '编辑计划' }));
+    fireEvent.click(screen.getByRole('button', { name: '继续规划' }));
+    fireEvent.click(screen.getByRole('button', { name: /开始执行/ }));
+    expect(onEdit).toHaveBeenCalledOnce();
+    expect(onContinue).toHaveBeenCalledOnce();
+    expect(onExecute).toHaveBeenCalledOnce();
+
+    rerender(<MessageList timeline={[]} streaming plan={plan} />);
+    expect(screen.getByRole('button', { name: '编辑计划' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /开始执行/ })).toBeDisabled();
   });
 });

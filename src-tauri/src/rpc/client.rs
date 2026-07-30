@@ -66,6 +66,13 @@ pub async fn pi_rpc_send(
         return Ok(());
     }
 
+    // Raw Bash is outside Pi's agent tool lifecycle, so it never reaches the
+    // extension's `tool_call` permission hook. Check the persisted session
+    // state here as well as in the HTTP API bridge to cover native Tauri RPC.
+    if is_raw_bash_command(&value) && session_is_plan_read_only(state.inner(), pid).await? {
+        return Err("Plan mode is read-only; raw Bash is unavailable until Build mode.".to_string());
+    }
+
     adapt_legacy_command(&mut value);
     send_rpc_value(state.inner(), pid, &value)
 }
@@ -119,6 +126,40 @@ pub async fn request_rpc(
     command: Value,
 ) -> Result<Value, String> {
     request_rpc_with_timeout(state, pid, command, RPC_REQUEST_TIMEOUT).await
+}
+
+pub async fn session_is_plan_read_only(state: &AppState, pid: u32) -> Result<bool, String> {
+    let response = request_rpc(state, Some(pid), json!({ "type": "get_entries" })).await?;
+    if response.get("success").and_then(Value::as_bool) != Some(true) {
+        return Err(response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("Pi did not return session entries")
+            .to_string());
+    }
+    let entries = response
+        .get("data")
+        .and_then(|data| data.get("entries"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Pi returned no session entries".to_string())?;
+
+    Ok(plan_entries_are_read_only(entries))
+}
+
+fn plan_entries_are_read_only(entries: &[Value]) -> bool {
+    for entry in entries.iter().rev() {
+        let is_plan_entry = entry.get("type").and_then(Value::as_str) == Some("custom")
+            && entry.get("customType").and_then(Value::as_str) == Some("plan-mode");
+        if !is_plan_entry {
+            continue;
+        }
+        let phase = entry
+            .get("data")
+            .and_then(|data| data.get("phase"))
+            .and_then(Value::as_str);
+        return matches!(phase, Some("plan") | Some("review"));
+    }
+    false
 }
 
 async fn request_rpc_with_timeout(
@@ -248,6 +289,42 @@ pub fn adapt_legacy_command(command: &mut Value) {
         if let Some(session_file) = command.get("sessionFile").cloned() {
             command["sessionPath"] = session_file;
         }
+    }
+}
+
+fn is_raw_bash_command(command: &Value) -> bool {
+    matches!(
+        command.get("type").and_then(Value::as_str),
+        Some("bash" | "run_bash" | "execute_bash")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_raw_bash_command, plan_entries_are_read_only};
+    use serde_json::json;
+
+    #[test]
+    fn detects_only_the_latest_persisted_read_only_plan_phase() {
+        let review = vec![
+            json!({ "type": "custom", "customType": "plan-mode", "data": { "phase": "build" } }),
+            json!({ "type": "custom", "customType": "plan-mode", "data": { "phase": "review" } }),
+        ];
+        let build = vec![
+            json!({ "type": "custom", "customType": "plan-mode", "data": { "phase": "plan" } }),
+            json!({ "type": "custom", "customType": "plan-mode", "data": { "phase": "executing" } }),
+        ];
+
+        assert!(plan_entries_are_read_only(&review));
+        assert!(!plan_entries_are_read_only(&build));
+        assert!(!plan_entries_are_read_only(&[]));
+    }
+
+    #[test]
+    fn identifies_the_raw_bash_rpc_escape_hatch() {
+        assert!(is_raw_bash_command(&json!({ "type": "bash", "command": "echo unsafe" })));
+        assert!(!is_raw_bash_command(&json!({ "type": "prompt", "message": "hello" })));
+        assert!(!is_raw_bash_command(&json!({ "type": "abort_bash" })));
     }
 }
 

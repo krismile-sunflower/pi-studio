@@ -88,7 +88,8 @@ const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(USER_HOME, ".p
 const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(PI_AGENT_DIR, "sessions");
 const INSTANCES_DIR = path.join(USER_HOME, ".pi", "tau-instances");
 const MIRROR_PROTOCOL_VERSION = 2;
-const MIRROR_CAPABILITIES = ["new_session", "switch_session", "session_dir", "file_preview", "open_in_editor"];
+const MIRROR_CAPABILITIES = ["new_session", "switch_session", "session_dir", "file_preview", "open_in_editor", "plan_control"];
+const PLAN_CONTROL_EVENT = "picode:plan-control";
 
 // Instance registry — tracks all running Tau servers
 function registerInstance(port: number, sessionFile: string, cwd: string) {
@@ -560,6 +561,21 @@ export default function (pi: ExtensionAPI) {
 
     try {
       switch (command.type) {
+        // Plan controls must not travel through sendUserMessage: that API
+        // intentionally bypasses Pi's slash-command parser and would create a
+        // visible fake user message. permissions.ts owns the actual pi-plan
+        // command and receives this private extension event.
+        case "pi_plan_command": {
+          const planCommand = typeof command.command === "string" ? command.command.trim() : "";
+          if (!/^\/pi-plan\s+(?:enter|build|revise|execute|update\s+[A-Za-z0-9_-]+)$/.test(planCommand)) {
+            sendTo(ws, error("pi_plan_command", "Invalid internal plan command"));
+            break;
+          }
+          activePi.events.emit(PLAN_CONTROL_EVENT, { command: planCommand });
+          sendTo(ws, success("pi_plan_command"));
+          break;
+        }
+
         // ─── Prompting ───
         case "prompt": {
           if (ctx && !ctx.isIdle()) {

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppSnapshot,
+  GitChange,
+  GitChangeArea,
   ModelsConfig,
   ModelsProviderConfig,
   ModelsProviderModel,
@@ -160,10 +162,60 @@ function gitChangeLabel(indexStatus: string, worktreeStatus: string): string {
   return '修改';
 }
 
+function isStagedGitChange(change: GitChange): boolean {
+  return change.indexStatus !== ' ' && change.indexStatus !== '?';
+}
+
+function isUnstagedGitChange(change: GitChange): boolean {
+  return (change.indexStatus === '?' && change.worktreeStatus === '?') || change.worktreeStatus !== ' ';
+}
+
+function gitChangePaths(change: GitChange): string[] {
+  return change.originalPath ? [change.originalPath, change.path] : [change.path];
+}
+
+function gitAreaChangeLabel(change: GitChange, area: GitChangeArea): string {
+  if (area === 'unstaged' && change.indexStatus === '?' && change.worktreeStatus === '?') return '新增';
+  return area === 'staged'
+    ? gitChangeLabel(change.indexStatus, ' ')
+    : gitChangeLabel(' ', change.worktreeStatus);
+}
+
 export function ChangesView({ snapshot }: { snapshot: AppSnapshot }) {
   const git = snapshot.gitStatus;
   const selected = snapshot.selectedGitPath;
+  const selectedArea = snapshot.selectedGitArea;
   const changeCount = git?.changes.length || 0;
+  const stagedChanges = (git?.changes || []).filter(isStagedGitChange);
+  const unstagedChanges = (git?.changes || []).filter(isUnstagedGitChange);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [gitAction, setGitAction] = useState<'pull' | 'commit' | 'push' | 'stage' | 'unstage' | null>(null);
+  const busy = snapshot.gitLoading || Boolean(gitAction);
+  const runGitAction = async (action: 'pull' | 'commit' | 'push' | 'stage' | 'unstage', operation: () => Promise<boolean>) => {
+    setGitAction(action);
+    try {
+      const completed = await operation();
+      if (completed && action === 'commit') setCommitMessage('');
+    } finally {
+      setGitAction(null);
+    }
+  };
+  const renderChange = (change: GitChange, area: GitChangeArea) => {
+    const label = gitAreaChangeLabel(change, area);
+    const active = selected === change.path && selectedArea === area;
+    const actionLabel = area === 'staged' ? `取消暂存 ${change.path}` : `暂存 ${change.path}`;
+    return (
+      <div className={`change-file-row${active ? ' active' : ''}`} key={`${area}:${change.path}`}>
+        <button className="change-file" type="button" onClick={() => void controller.selectGitChange(change.path, area)}>
+          <span className={`change-status ${label}`}>{label}</span>
+          <span className="change-file-copy"><strong>{change.path}</strong>{change.originalPath ? <small>{change.originalPath} → {change.path}</small> : null}</span>
+        </button>
+        <button className="change-file-stage" type="button" aria-label={actionLabel} title={actionLabel} disabled={busy} onClick={() => void runGitAction(area === 'staged' ? 'unstage' : 'stage', () => area === 'staged' ? controller.unstageGit(gitChangePaths(change)) : controller.stageGit(gitChangePaths(change)))}>
+          <Icon name={area === 'staged' ? 'close' : 'plus'} width={13} height={13} />
+        </button>
+      </div>
+    );
+  };
   return (
     <section className="changes-panel workspace-view">
       <div className="settings-header changes-header">
@@ -173,9 +225,9 @@ export function ChangesView({ snapshot }: { snapshot: AppSnapshot }) {
             <h3>Git 变更</h3>
             <button className="settings-close" type="button" aria-label="关闭变更中心" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button>
           </div>
-          <p className="settings-subtitle">查看当前项目的未提交改动；此处不会修改仓库。</p>
+          <p className="settings-subtitle">审阅并暂存改动，再提交暂存区内容或同步当前分支。</p>
         </div>
-        <button className="settings-action-btn" type="button" onClick={() => void controller.loadGitStatus()} disabled={snapshot.gitLoading}>
+        <button className="settings-action-btn" type="button" onClick={() => void controller.loadGitStatus()} disabled={busy}>
           {snapshot.gitLoading ? '刷新中…' : '刷新'}
         </button>
       </div>
@@ -183,30 +235,57 @@ export function ChangesView({ snapshot }: { snapshot: AppSnapshot }) {
       {snapshot.gitError ? <div className="changes-notice error">{snapshot.gitError}</div> : null}
       {!snapshot.gitLoading && !snapshot.gitError && git && !git.isRepository ? <div className="changes-notice">当前文件夹不是 Git 仓库。</div> : null}
       {git?.isRepository ? (
-        <div className="changes-workbench">
-          <aside className="changes-file-list">
-            <div className="changes-summary">
-              <span className="changes-branch">{git.branch || 'HEAD'}</span>
-              <span>{changeCount ? `${changeCount} 个文件有改动` : '工作区干净'}</span>
+        <>
+          <div className="changes-command-deck">
+            <div className="changes-sync-row">
+              <div className="changes-sync-copy">
+                <strong>{git.branch || 'HEAD'}</strong>
+                <span>{git.upstream ? `${git.upstream} · ↑ ${git.ahead} · ↓ ${git.behind}` : '尚未设置上游分支'}</span>
+              </div>
+              <div className="changes-sync-actions">
+                <button type="button" disabled={busy || !git.upstream} title={git.upstream ? '仅快进拉取上游分支' : '需要先设置上游分支'} onClick={() => void runGitAction('pull', () => controller.pullGit())}>{gitAction === 'pull' ? '拉取中…' : '拉取'}</button>
+                <button type="button" disabled={busy} onClick={() => void runGitAction('push', () => controller.pushGit())}>{gitAction === 'push' ? '推送中…' : '推送'}</button>
+              </div>
             </div>
-            {git.changes.length ? git.changes.map((change) => (
-              <button className={`change-file${selected === change.path ? ' active' : ''}`} key={change.path} type="button" onClick={() => void controller.selectGitChange(change.path)}>
-                <span className={`change-status ${gitChangeLabel(change.indexStatus, change.worktreeStatus)}`}>{gitChangeLabel(change.indexStatus, change.worktreeStatus)}</span>
-                <span className="change-file-copy"><strong>{change.path}</strong>{change.originalPath ? <small>{change.originalPath} → {change.path}</small> : null}</span>
-              </button>
-            )) : <div className="changes-empty">没有未提交的改动。</div>}
-          </aside>
-          <article className="changes-diff-panel">
-            {!selected ? <div className="changes-empty">选择左侧文件以查看 diff。</div> : null}
-            {snapshot.gitDiffLoading ? <div className="changes-empty">正在读取 diff…</div> : null}
-            {selected && !snapshot.gitDiffLoading && snapshot.gitDiff ? (
-              <>
-                <div className="changes-diff-header"><strong>{snapshot.gitDiff.path}</strong><span>相对 HEAD</span></div>
-                <pre className="changes-diff">{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre>
-              </>
-            ) : null}
-          </article>
-        </div>
+            <div className="changes-stage-row">
+              <span>{stagedChanges.length} 个已暂存 · {unstagedChanges.length} 个未暂存</span>
+              <div>
+                <button type="button" disabled={busy || !unstagedChanges.length} onClick={() => void runGitAction('stage', () => controller.stageAllGit())}>全部暂存</button>
+                <button type="button" disabled={busy || !stagedChanges.length} onClick={() => void runGitAction('unstage', () => controller.unstageAllGit())}>取消全部暂存</button>
+              </div>
+            </div>
+            <form className="changes-commit-row" onSubmit={(event) => {
+              event.preventDefault();
+              if (!commitMessage.trim() || !stagedChanges.length || busy) return;
+              void runGitAction('commit', () => controller.commitGit(commitMessage));
+            }}>
+              <input value={commitMessage} maxLength={500} disabled={busy || !stagedChanges.length} onChange={(event) => setCommitMessage(event.target.value)} placeholder={stagedChanges.length ? '输入提交说明' : '请先暂存需要提交的改动'} aria-label="Git 提交说明" />
+              <button type="submit" disabled={busy || !stagedChanges.length || !commitMessage.trim()}>{gitAction === 'commit' ? '提交中…' : `提交暂存 (${stagedChanges.length})`}</button>
+            </form>
+          </div>
+          <div className="changes-workbench">
+            <aside className="changes-file-list">
+              <div className="changes-summary">
+                <span className="changes-branch">{git.branch || 'HEAD'}</span>
+                <span>{changeCount ? `${changeCount} 个文件有改动` : '工作区干净'}</span>
+              </div>
+              <div className="changes-section-heading"><span>暂存的更改</span><strong>{stagedChanges.length}</strong></div>
+              {stagedChanges.length ? stagedChanges.map((change) => renderChange(change, 'staged')) : <div className="changes-empty compact">还没有暂存的改动。</div>}
+              <div className="changes-section-heading"><span>更改</span><strong>{unstagedChanges.length}</strong></div>
+              {unstagedChanges.length ? unstagedChanges.map((change) => renderChange(change, 'unstaged')) : <div className="changes-empty compact">没有未暂存的改动。</div>}
+            </aside>
+            <article className="changes-diff-panel">
+              {!selected ? <div className="changes-empty">选择左侧文件以查看 diff。</div> : null}
+              {snapshot.gitDiffLoading ? <div className="changes-empty">正在读取 diff…</div> : null}
+              {selected && !snapshot.gitDiffLoading && snapshot.gitDiff ? (
+                <>
+                  <div className="changes-diff-header"><strong>{snapshot.gitDiff.path}</strong><span>{selectedArea === 'staged' ? '暂存区' : '工作区'}</span></div>
+                  <pre className="changes-diff">{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre>
+                </>
+              ) : null}
+            </article>
+          </div>
+        </>
       ) : null}
     </section>
   );

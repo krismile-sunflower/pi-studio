@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { AppSnapshot } from '../lib/types';
 import { BUILTIN_SLASH_COMMANDS } from '../lib/slash-commands';
+import { createPlanSessionState } from './plan-state';
 
 const initialSnapshot: AppSnapshot = {
   view: 'chat',
@@ -11,6 +12,7 @@ const initialSnapshot: AppSnapshot = {
   selectedSessionFile: null,
   selectedSessionTitle: '',
   activeSessionFile: null,
+  plan: createPlanSessionState(),
   timeline: [],
   sessionProjects: [],
   sessionSearchResults: [],
@@ -66,6 +68,7 @@ const initialSnapshot: AppSnapshot = {
   gitLoading: false,
   gitError: '',
   selectedGitPath: null,
+  selectedGitArea: null,
   gitDiff: null,
   gitDiffLoading: false,
   extensionUiRequest: null,

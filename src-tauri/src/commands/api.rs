@@ -495,6 +495,29 @@ async fn local_rpc_response(
                     )))
                 }
             };
+            // `bash` is a raw RPC escape hatch and does not pass through the
+            // agent's normal `tool_call` lifecycle. Inspect the persisted
+            // session plan before forwarding so Plan/Review cannot be bypassed
+            // by a client sending the command directly.
+            if matches!(command_type.as_str(), "bash" | "run_bash" | "execute_bash") {
+                match crate::rpc::client::session_is_plan_read_only(state.inner(), pid).await {
+                    Ok(true) => {
+                        return Ok(rpc_api_response(rpc_error(
+                            command_id,
+                            &command_type,
+                            "Plan mode is read-only; raw Bash is unavailable until Build mode.".into(),
+                        )));
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        return Ok(rpc_api_response(rpc_error(
+                            command_id,
+                            &command_type,
+                            format!("Unable to verify Plan mode before raw Bash: {error}"),
+                        )));
+                    }
+                }
+            }
             crate::rpc::client::adapt_legacy_command(&mut command);
             match crate::rpc::client::request_rpc(state.inner(), Some(pid), command).await {
                 Ok(response) => {

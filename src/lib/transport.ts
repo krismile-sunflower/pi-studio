@@ -118,6 +118,35 @@ export class PiTransport {
     return false;
   }
 
+  /**
+   * Wait for the native bridge to accept a command. Prompting and internal
+   * session controls use this path so callers can restore optimistic UI state
+   * when the running Pi process rejects or disconnects the request.
+   */
+  async sendReliable(data: Record<string, unknown>): Promise<void> {
+    if (this.usesTauriRpc()) {
+      await invoke('pi_rpc_send', {
+        request: {
+          pid: window.tauDesktop.instanceId,
+          message: JSON.stringify(data),
+        },
+      });
+      return;
+    }
+
+    if (this.usesTauriBridge()) {
+      await invoke('ws_send', { request: { message: JSON.stringify(data) } });
+      return;
+    }
+
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(data));
+      return;
+    }
+
+    throw new Error('PiCode 尚未连接到 Pi');
+  }
+
   async disconnect(): Promise<void> {
     this.intentionallyClosed = true;
     this.connectionState = 'closed';

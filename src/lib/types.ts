@@ -4,6 +4,24 @@ export type WorkspaceView = 'chat' | 'projects' | 'changes' | 'customization' | 
 export type ThemeId = 'dark' | 'light';
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | string;
 
+export type PlanPhase = 'build' | 'plan' | 'review' | 'executing' | 'complete';
+export type PlanStepStatus = 'pending' | 'in_progress' | 'complete' | 'blocked';
+
+export interface PlanStep {
+  id: string;
+  title: string;
+  detail?: string;
+  status: PlanStepStatus;
+}
+
+/** Persisted by the Pi extension as a session-scoped `plan-mode` custom entry. */
+export interface PlanSessionState {
+  phase: PlanPhase;
+  goal: string;
+  steps: PlanStep[];
+  updatedAt: string;
+}
+
 export interface ImageAttachment {
   type?: 'image';
   data: string;
@@ -271,13 +289,23 @@ export interface GitChange {
 export interface GitStatus {
   root: string;
   branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
   isRepository: boolean;
   changes: GitChange[];
 }
 
+export type GitChangeArea = 'staged' | 'unstaged';
+
 export interface GitFileDiff {
   path: string;
   diff: string;
+}
+
+export interface GitOperationResult {
+  summary: string;
+  output: string;
 }
 
 export interface PiRuntimeInfo {
@@ -442,6 +470,7 @@ export interface AppSnapshot {
   selectedSessionFile: string | null;
   selectedSessionTitle: string;
   activeSessionFile: string | null;
+  plan: PlanSessionState;
   timeline: TimelineItem[];
   sessionProjects: SessionProject[];
   sessionSearchResults: SessionSearchResult[];
@@ -499,6 +528,7 @@ export interface AppSnapshot {
   gitLoading: boolean;
   gitError: string;
   selectedGitPath: string | null;
+  selectedGitArea: GitChangeArea | null;
   gitDiff: GitFileDiff | null;
   gitDiffLoading: boolean;
   extensionUiRequest: ExtensionUiRequest | null;

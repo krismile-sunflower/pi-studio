@@ -4,6 +4,13 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   root: 'src',
   plugins: [react()],
+  resolve: {
+    // Vitest exercises the packaged extension's actual policy without adding
+    // its Node-only source to the browser TypeScript program.
+    alias: {
+      '@picode-plan-permissions': new URL('./src-tauri/extensions/permissions.ts', import.meta.url).pathname,
+    },
+  },
   clearScreen: false,
   server: {
     strictPort: true,

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiJson, postJson } from '../lib/desktop';
-import type { AppSnapshot, FileAttachment, GitChange, TimelineItem, ToolExecution } from '../lib/types';
+import type { AppSnapshot, FileAttachment, GitChange, GitChangeArea, PlanSessionState, PlanStep, TimelineItem, ToolExecution } from '../lib/types';
 import { Icon } from './Icon';
 import { controller } from '../app/controller';
+import { canExecutePlan } from '../app/plan-state';
 
 interface FileItem {
   name: string;
@@ -37,18 +38,15 @@ interface GitChangeTreeNode {
 }
 
 type WorkspaceTab = 'plan' | 'changes' | 'files' | 'terminal';
-type TaskPlanStatus = 'pending' | 'in_progress' | 'complete';
-
-interface TaskPlanItem {
-  id: string;
-  title: string;
-  status: TaskPlanStatus;
-}
 
 interface FileSidebarProps {
   rootPath: string;
   open: boolean;
   snapshot: AppSnapshot;
+  /** Incremented by the chat card when the plan editor should be revealed. */
+  planRequest?: number;
+  /** Incremented when the plan summary should be made visible without editing. */
+  planTabRequest?: number;
   onClose(): void;
   onInsert(file: FileAttachment): void;
 }
@@ -75,6 +73,25 @@ function gitChangeLabel(indexStatus: string, worktreeStatus: string): string {
   if (status.includes('D')) return '删除';
   if (status.includes('R')) return '重命名';
   return '修改';
+}
+
+function isStagedGitChange(change: GitChange): boolean {
+  return change.indexStatus !== ' ' && change.indexStatus !== '?';
+}
+
+function isUnstagedGitChange(change: GitChange): boolean {
+  return (change.indexStatus === '?' && change.worktreeStatus === '?') || change.worktreeStatus !== ' ';
+}
+
+function gitChangePaths(change: GitChange): string[] {
+  return change.originalPath ? [change.originalPath, change.path] : [change.path];
+}
+
+function gitAreaChangeLabel(change: GitChange, area: GitChangeArea): string {
+  if (area === 'unstaged' && change.indexStatus === '?' && change.worktreeStatus === '?') return '新增';
+  return area === 'staged'
+    ? gitChangeLabel(change.indexStatus, ' ')
+    : gitChangeLabel(' ', change.worktreeStatus);
 }
 
 function buildGitChangeTree(changes: GitChange[]): GitChangeTreeNode {
@@ -116,27 +133,19 @@ function terminalCommand(tool: ToolExecution): string {
   return tool.toolName;
 }
 
-function readTaskPlan(key: string): TaskPlanItem[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(key) || '[]') as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      if (!item || typeof item !== 'object') return [];
-      const value = item as Partial<TaskPlanItem>;
-      return typeof value.id === 'string' && typeof value.title === 'string' && ['pending', 'in_progress', 'complete'].includes(value.status || '')
-        ? [{ id: value.id, title: value.title, status: value.status as TaskPlanStatus }]
-        : [];
-    });
-  } catch {
-    return [];
-  }
+function planStatusLabel(status: PlanStep['status']): string {
+  return { pending: '待办', in_progress: '进行中', complete: '完成', blocked: '受阻' }[status];
 }
 
-function nextTaskPlanStatus(status: TaskPlanStatus): TaskPlanStatus {
-  return status === 'pending' ? 'in_progress' : status === 'in_progress' ? 'complete' : 'pending';
+function planPhaseLabel(phase: PlanSessionState['phase']): string {
+  return { build: '构建', plan: '规划中', review: '待确认', executing: '执行中', complete: '已完成' }[phase];
 }
 
-export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: FileSidebarProps) {
+function editablePlanStep(): PlanStep {
+  return { id: `step-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title: '', detail: '', status: 'pending' };
+}
+
+export function FileSidebar({ rootPath, open, snapshot, planRequest = 0, planTabRequest = 0, onClose, onInsert }: FileSidebarProps) {
   const [itemsByPath, setItemsByPath] = useState<Record<string, FileItem[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -144,9 +153,10 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
   const [preview, setPreview] = useState<FileContentResponse | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>('files');
   const [expandedChangePaths, setExpandedChangePaths] = useState<Set<string>>(new Set());
-  const [planDraft, setPlanDraft] = useState('');
-  const planStorageKey = useMemo(() => `pi-studio:task-plan:${rootPath || 'no-folder'}:${snapshot.selectedSessionFile || 'active'}`, [rootPath, snapshot.selectedSessionFile]);
-  const [taskPlan, setTaskPlan] = useState<TaskPlanItem[]>(() => readTaskPlan(planStorageKey));
+  const [gitCommitMessage, setGitCommitMessage] = useState('');
+  const [gitAction, setGitAction] = useState<'pull' | 'commit' | 'push' | 'stage' | 'unstage' | null>(null);
+  const [planEditorOpen, setPlanEditorOpen] = useState(false);
+  const [planDraft, setPlanDraft] = useState<PlanSessionState>(snapshot.plan);
 
   const load = async (path: string) => {
     if (!path) return;
@@ -174,25 +184,56 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
   }, [open, rootPath, tab]);
 
   useEffect(() => {
-    setTaskPlan(readTaskPlan(planStorageKey));
-    setPlanDraft('');
-  }, [planStorageKey]);
+    setPlanDraft(snapshot.plan);
+  }, [snapshot.plan, snapshot.selectedSessionFile]);
+
+  useEffect(() => {
+    if (!planRequest) return;
+    setTab('plan');
+    setPlanEditorOpen(true);
+  }, [planRequest]);
+
+  useEffect(() => {
+    if (!planTabRequest) return;
+    setTab('plan');
+  }, [planTabRequest]);
 
   const rootItems = itemsByPath[rootPath] || [];
-  const gitChangeTree = useMemo(() => buildGitChangeTree(snapshot.gitStatus?.changes || []), [snapshot.gitStatus?.changes]);
-  const taskRequest = useMemo(() => latestUserRequest(snapshot.timeline), [snapshot.timeline]);
+  const stagedGitChanges = useMemo(() => (snapshot.gitStatus?.changes || []).filter(isStagedGitChange), [snapshot.gitStatus?.changes]);
+  const unstagedGitChanges = useMemo(() => (snapshot.gitStatus?.changes || []).filter(isUnstagedGitChange), [snapshot.gitStatus?.changes]);
+  const stagedGitChangeTree = useMemo(() => buildGitChangeTree(stagedGitChanges), [stagedGitChanges]);
+  const unstagedGitChangeTree = useMemo(() => buildGitChangeTree(unstagedGitChanges), [unstagedGitChanges]);
+  const taskRequest = useMemo(() => snapshot.plan.goal || latestUserRequest(snapshot.timeline), [snapshot.plan.goal, snapshot.timeline]);
   const toolCount = useMemo(() => snapshot.timeline.filter((item) => item.kind === 'tool').length, [snapshot.timeline]);
   const terminalTools = useMemo(() => snapshot.timeline.filter((item): item is Extract<TimelineItem, { kind: 'tool' }> => item.kind === 'tool').map((item) => item.tool).filter(isTerminalTool).reverse(), [snapshot.timeline]);
-  const completedPlanCount = taskPlan.filter((item) => item.status === 'complete').length;
-  const saveTaskPlan = (next: TaskPlanItem[]) => {
-    setTaskPlan(next);
-    localStorage.setItem(planStorageKey, JSON.stringify(next));
+  const plan = snapshot.plan;
+  const completedPlanCount = plan.steps.filter((item) => item.status === 'complete').length;
+  const canEditPlan = !snapshot.isStreaming && plan.phase !== 'executing';
+  const gitBusy = snapshot.gitLoading || Boolean(gitAction);
+  const updateDraftStep = (id: string, patch: Partial<PlanStep>) => {
+    setPlanDraft((current) => ({
+      ...current,
+      steps: current.steps.map((step) => step.id === id ? { ...step, ...patch } : step),
+    }));
   };
-  const addTaskPlanItem = () => {
-    const title = planDraft.trim();
-    if (!title) return;
-    saveTaskPlan([...taskPlan, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title, status: taskPlan.some((item) => item.status === 'in_progress') ? 'pending' : 'in_progress' }]);
-    setPlanDraft('');
+  const savePlan = async () => {
+    const steps = planDraft.steps.filter((step) => step.title.trim()).map((step) => ({
+      ...step,
+      title: step.title.trim(),
+      detail: step.detail?.trim() || undefined,
+      status: 'pending' as const,
+    }));
+    const saved = await controller.updatePlan({ goal: planDraft.goal.trim(), steps });
+    if (saved) setPlanEditorOpen(false);
+  };
+  const runGitAction = async (action: 'pull' | 'commit' | 'push' | 'stage' | 'unstage', operation: () => Promise<boolean>) => {
+    setGitAction(action);
+    try {
+      const completed = await operation();
+      if (completed && action === 'commit') setGitCommitMessage('');
+    } finally {
+      setGitAction(null);
+    }
   };
 
   const openPreview = async (item: FileItem) => {
@@ -256,7 +297,7 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
       );
     });
 
-  const renderGitChanges = (node: GitChangeTreeNode, depth: number): React.ReactNode =>
+  const renderGitChanges = (node: GitChangeTreeNode, depth: number, area: GitChangeArea): React.ReactNode =>
     [...node.children.values()]
       .sort((left, right) => {
         if (Boolean(left.change) !== Boolean(right.change)) return left.change ? 1 : -1;
@@ -264,10 +305,11 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
       })
       .map((child) => {
         const isDirectory = !child.change;
-        const isExpanded = expandedChangePaths.has(child.path);
+        const expansionKey = `${area}:${child.path}`;
+        const isExpanded = expandedChangePaths.has(expansionKey);
         if (isDirectory) {
           return (
-            <div key={child.path}>
+            <div key={`${area}:${child.path}`}>
               <button
                 className="file-change-directory"
                 type="button"
@@ -275,7 +317,7 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
                 aria-expanded={isExpanded}
                 onClick={() => setExpandedChangePaths((current) => {
                   const next = new Set(current);
-                  if (next.has(child.path)) next.delete(child.path); else next.add(child.path);
+                  if (next.has(expansionKey)) next.delete(expansionKey); else next.add(expansionKey);
                   return next;
                 })}
               >
@@ -283,16 +325,24 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
                 <Icon name="folder" width={14} />
                 <span>{child.name}</span>
               </button>
-              {isExpanded ? renderGitChanges(child, depth + 1) : null}
+              {isExpanded ? renderGitChanges(child, depth + 1, area) : null}
             </div>
           );
         }
         const change = child.change!;
+        const label = gitAreaChangeLabel(change, area);
+        const active = snapshot.selectedGitPath === change.path && snapshot.selectedGitArea === area;
+        const actionLabel = area === 'staged' ? `取消暂存 ${change.path}` : `暂存 ${change.path}`;
         return (
-          <button className={`file-change-row${snapshot.selectedGitPath === change.path ? ' active' : ''}`} type="button" key={change.path} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => void controller.selectGitChange(change.path)}>
-            <span className={`file-change-status ${gitChangeLabel(change.indexStatus, change.worktreeStatus)}`}>{gitChangeLabel(change.indexStatus, change.worktreeStatus)}</span>
-            <span className="file-change-path" title={change.path}>{child.name}</span>
-          </button>
+          <div className={`file-change-row${active ? ' active' : ''}`} key={`${area}:${change.path}`} style={{ paddingLeft: 10 + depth * 14 }}>
+            <button className="file-change-select" type="button" onClick={() => void controller.selectGitChange(change.path, area)}>
+              <span className={`file-change-status ${label}`}>{label}</span>
+              <span className="file-change-path" title={change.path}>{child.name}</span>
+            </button>
+            <button className="file-change-stage" type="button" aria-label={actionLabel} title={actionLabel} disabled={gitBusy} onClick={() => void runGitAction(area === 'staged' ? 'unstage' : 'stage', () => area === 'staged' ? controller.unstageGit(gitChangePaths(change)) : controller.stageGit(gitChangePaths(change)))}>
+              <Icon name={area === 'staged' ? 'close' : 'plus'} width={12} height={12} />
+            </button>
+          </div>
         );
       });
 
@@ -314,7 +364,7 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
           </div>
           <div className="file-sidebar-actions">
             {tab === 'files' ? <button className="icon-btn" type="button" title="全部折叠" aria-label="全部折叠" onClick={() => setExpanded(new Set())}><Icon name="arrow-left" width={14} height={14} style={{ transform: 'rotate(90deg)' }} /></button> : null}
-            {tab === 'changes' ? <button className="icon-btn" type="button" title="刷新 Git 变更" aria-label="刷新 Git 变更" onClick={() => void controller.loadGitStatus()}><Icon name="refresh" width={14} height={14} /></button> : null}
+            {tab === 'changes' ? <button className="icon-btn" type="button" title="刷新 Git 变更" aria-label="刷新 Git 变更" disabled={gitBusy} onClick={() => void controller.loadGitStatus()}><Icon name="refresh" width={14} height={14} /></button> : null}
             <button className="icon-btn" type="button" title="在文件管理器中打开" aria-label="在文件管理器中打开" disabled={!rootPath} onClick={() => void postJson('/api/open', { filePath: rootPath })}><Icon name="folder" width={14} height={14} /></button>
             <button className="icon-btn" type="button" title="关闭文件栏" aria-label="关闭文件栏" onClick={onClose}><Icon name="close" width={14} height={14} /></button>
           </div>
@@ -323,28 +373,49 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
         <div className="file-list file-browser-host">
           {tab === 'plan' ? (
             <div className="file-task-view">
-              <div className="task-state-row"><span className={`task-state-dot${snapshot.isStreaming ? ' active' : ''}`} /><span>{snapshot.isStreaming ? 'Agent 正在执行' : snapshot.connection === 'connected' ? '等待下一步' : '未连接'}</span></div>
+              <div className={`task-state-row plan-state-${plan.phase}`}><span className={`task-state-dot${snapshot.isStreaming ? ' active' : ''}`} /><span>{snapshot.isStreaming ? 'Agent 正在工作' : `${planPhaseLabel(plan.phase)} · ${plan.phase === 'plan' || plan.phase === 'review' ? '只读护栏已开启' : '可使用当前权限设置'}`}</span></div>
               <section className="task-section">
-                <span className="task-section-label">当前任务</span>
-                <p className={`task-request${taskRequest ? '' : ' empty'}`}>{taskRequest || '在对话中描述一个目标，Agent 的执行状态将显示在这里。'}</p>
+                <div className="task-plan-heading"><span className="task-section-label">目标</span><span>{plan.updatedAt === new Date(0).toISOString() ? '当前会话' : '已保存至会话'}</span></div>
+                <p className={`task-request${taskRequest ? '' : ' empty'}`}>{taskRequest || '切换到计划模式，然后描述想要完成的目标。计划不会写入项目文件。'}</p>
               </section>
               <section className="task-section">
-                <div className="task-plan-heading"><span className="task-section-label">任务计划</span><span>{taskPlan.length ? `${completedPlanCount}/${taskPlan.length}` : '未创建'}</span></div>
+                <div className="task-plan-heading"><span className="task-section-label">计划步骤</span><span>{plan.steps.length ? `${completedPlanCount}/${plan.steps.length}` : '待生成'}</span></div>
                 <div className="task-plan-list">
-                  {taskPlan.map((item) => (
+                  {plan.steps.map((item, index) => (
                     <div className={`task-plan-item ${item.status}`} key={item.id}>
-                      <button className="task-plan-status" type="button" title="切换步骤状态" aria-label={`将“${item.title}”切换为下一状态`} onClick={() => saveTaskPlan(taskPlan.map((current) => current.id === item.id ? { ...current, status: nextTaskPlanStatus(current.status) } : current))}><Icon name={item.status === 'complete' ? 'check' : 'chevron'} width={11} /></button>
-                      <span className="task-plan-title">{item.title}</span>
-                      <span className="task-plan-status-label">{item.status === 'pending' ? '待开始' : item.status === 'in_progress' ? '进行中' : '完成'}</span>
-                      <button className="task-plan-remove" type="button" title="删除步骤" aria-label={`删除“${item.title}”`} onClick={() => saveTaskPlan(taskPlan.filter((current) => current.id !== item.id))}>×</button>
+                      <span className="task-plan-status" aria-label={planStatusLabel(item.status)}>{item.status === 'complete' ? <Icon name="check" width={11} /> : item.status === 'blocked' ? '!' : index + 1}</span>
+                      <span className="task-plan-copy"><span className="task-plan-title">{item.title}</span>{item.detail ? <small>{item.detail}</small> : null}</span>
+                      <span className="task-plan-status-label">{planStatusLabel(item.status)}</span>
                     </div>
                   ))}
-                  {!taskPlan.length ? <p className="task-plan-empty">将复杂任务拆成 3–5 步，进度会保留在当前会话中。</p> : null}
+                  {!plan.steps.length ? <p className="task-plan-empty">生成计划后，步骤会保留在当前 Pi 会话，并在这里显示进度。</p> : null}
                 </div>
-                <div className="task-plan-add">
-                  <input value={planDraft} onChange={(event) => setPlanDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addTaskPlanItem(); }} placeholder="添加下一步" aria-label="添加计划步骤" />
-                  <button type="button" disabled={!planDraft.trim()} onClick={addTaskPlanItem}>添加</button>
+                <div className="task-plan-actions">
+                  <button type="button" disabled={!canEditPlan} onClick={() => { setPlanDraft(plan); setPlanEditorOpen((value) => !value); }}>{planEditorOpen ? '收起编辑器' : '编辑计划'}</button>
+                  {plan.phase === 'plan' || plan.phase === 'review' ? <button type="button" disabled={snapshot.isStreaming} onClick={() => void controller.revisePlan()}>继续规划</button> : null}
+                  {plan.phase === 'review' ? <button className="task-plan-execute" type="button" disabled={snapshot.isStreaming || !canExecutePlan(plan)} onClick={() => void controller.executePlan()}>开始执行</button> : null}
                 </div>
+                {planEditorOpen ? (
+                  <div className="task-plan-editor" aria-label="编辑计划">
+                    <label>目标<textarea value={planDraft.goal} disabled={!canEditPlan} onChange={(event) => setPlanDraft((current) => ({ ...current, goal: event.target.value }))} placeholder="这份计划要完成什么？" /></label>
+                    <div className="task-plan-editor-heading"><span>步骤</span><button type="button" disabled={!canEditPlan} onClick={() => setPlanDraft((current) => ({ ...current, steps: [...current.steps, editablePlanStep()] }))}>添加步骤</button></div>
+                    {planDraft.steps.map((step, index) => (
+                      <div className="task-plan-editor-step" key={step.id}>
+                        <span>{index + 1}</span>
+                        <div>
+                          <input value={step.title} disabled={!canEditPlan} onChange={(event) => updateDraftStep(step.id, { title: event.target.value })} placeholder="步骤标题" aria-label={`步骤 ${index + 1} 标题`} />
+                          <textarea value={step.detail || ''} disabled={!canEditPlan} onChange={(event) => updateDraftStep(step.id, { detail: event.target.value })} placeholder="实现说明（可选）" aria-label={`步骤 ${index + 1} 说明`} />
+                        </div>
+                        <div className="task-plan-editor-step-actions">
+                          <button type="button" disabled={!canEditPlan || index === 0} aria-label="上移步骤" onClick={() => setPlanDraft((current) => { const steps = [...current.steps]; [steps[index - 1], steps[index]] = [steps[index]!, steps[index - 1]!]; return { ...current, steps }; })}>↑</button>
+                          <button type="button" disabled={!canEditPlan || index === planDraft.steps.length - 1} aria-label="下移步骤" onClick={() => setPlanDraft((current) => { const steps = [...current.steps]; [steps[index + 1], steps[index]] = [steps[index]!, steps[index + 1]!]; return { ...current, steps }; })}>↓</button>
+                          <button type="button" disabled={!canEditPlan} aria-label="删除步骤" onClick={() => setPlanDraft((current) => ({ ...current, steps: current.steps.filter((item) => item.id !== step.id) }))}>×</button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="task-plan-editor-footer"><span>保存有效步骤后会回到“待确认”，需要再次开始执行。</span><button type="button" disabled={!canEditPlan} onClick={() => void savePlan()}>保存计划</button></div>
+                  </div>
+                ) : null}
               </section>
               <section className="task-section task-metrics" aria-label="任务概览">
                 <div><strong>{toolCount}</strong><span>工具步骤</span></div>
@@ -353,19 +424,48 @@ export function FileSidebar({ rootPath, open, snapshot, onClose, onInsert }: Fil
               </section>
               <section className="task-section">
                 <span className="task-section-label">当前状态</span>
-                <p className="task-next-step">{snapshot.isStreaming ? '执行过程会实时出现在对话与终端中。' : snapshot.gitStatus?.changes.length ? '可在“变更”中审阅工作区修改，然后继续任务。' : '准备就绪。发送消息即可开始一个任务。'}</p>
+                <p className="task-next-step">{plan.phase === 'plan' || plan.phase === 'review' ? '计划期只能读取、搜索和运行安全的只读命令。' : plan.phase === 'executing' ? '步骤完成情况会随 Agent 的 [DONE:n] 回报实时更新。' : snapshot.gitStatus?.changes.length ? '可在“变更”中审阅工作区修改。' : '准备就绪。发送消息即可开始一个任务。'}</p>
               </section>
             </div>
           ) : tab === 'changes' ? (
             <div className="file-changes-view">
+              {snapshot.gitStatus?.isRepository ? (
+                <div className="file-git-controls">
+                  <div className="file-git-sync">
+                    <span title={snapshot.gitStatus.upstream || undefined}>{snapshot.gitStatus.upstream ? `↑ ${snapshot.gitStatus.ahead} · ↓ ${snapshot.gitStatus.behind}` : '无上游'}</span>
+                    <div>
+                      <button type="button" disabled={gitBusy || !snapshot.gitStatus.upstream} title={snapshot.gitStatus.upstream ? '仅快进拉取上游分支' : '需要先设置上游分支'} onClick={() => void runGitAction('pull', () => controller.pullGit())}>{gitAction === 'pull' ? '拉取中…' : '拉取'}</button>
+                      <button type="button" disabled={gitBusy} onClick={() => void runGitAction('push', () => controller.pushGit())}>{gitAction === 'push' ? '推送中…' : '推送'}</button>
+                    </div>
+                  </div>
+                  <div className="file-git-stage-summary">
+                    <span>{stagedGitChanges.length} 已暂存 · {unstagedGitChanges.length} 未暂存</span>
+                    <div>
+                      <button type="button" disabled={gitBusy || !unstagedGitChanges.length} onClick={() => void runGitAction('stage', () => controller.stageAllGit())}>全部暂存</button>
+                      <button type="button" disabled={gitBusy || !stagedGitChanges.length} onClick={() => void runGitAction('unstage', () => controller.unstageAllGit())}>全部取消</button>
+                    </div>
+                  </div>
+                  <form className="file-git-commit" onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!gitCommitMessage.trim() || !stagedGitChanges.length || gitBusy) return;
+                    void runGitAction('commit', () => controller.commitGit(gitCommitMessage));
+                  }}>
+                    <input value={gitCommitMessage} maxLength={500} disabled={gitBusy || !stagedGitChanges.length} onChange={(event) => setGitCommitMessage(event.target.value)} placeholder={stagedGitChanges.length ? '提交说明' : '请先暂存改动'} aria-label="Git 提交说明" />
+                    <button type="submit" disabled={gitBusy || !stagedGitChanges.length || !gitCommitMessage.trim()}>{gitAction === 'commit' ? '提交中…' : '提交暂存'}</button>
+                  </form>
+                </div>
+              ) : null}
               {snapshot.gitLoading ? <div className="file-loading loading">正在读取 Git 变更…</div> : null}
               {!snapshot.gitLoading && snapshot.gitError ? <div className="file-tree-status error">{snapshot.gitError}</div> : null}
               {!snapshot.gitLoading && !snapshot.gitError && snapshot.gitStatus && !snapshot.gitStatus.isRepository ? <div className="file-loading">当前文件夹不是 Git 仓库。</div> : null}
               {!snapshot.gitLoading && snapshot.gitStatus?.isRepository && snapshot.gitStatus.changes.length === 0 ? <div className="file-loading">工作区干净。</div> : null}
               <div className="file-change-list">
-                {renderGitChanges(gitChangeTree, 0)}
+                {snapshot.gitStatus?.changes.length ? <div className="file-change-section-heading"><span>暂存的更改</span><strong>{stagedGitChanges.length}</strong></div> : null}
+                {renderGitChanges(stagedGitChangeTree, 0, 'staged')}
+                {snapshot.gitStatus?.changes.length ? <div className="file-change-section-heading"><span>更改</span><strong>{unstagedGitChanges.length}</strong></div> : null}
+                {renderGitChanges(unstagedGitChangeTree, 0, 'unstaged')}
               </div>
-              {snapshot.selectedGitPath ? <div className="file-change-diff"><div className="file-change-diff-head">{snapshot.gitDiffLoading ? '正在加载 diff…' : snapshot.gitDiff?.path}</div>{!snapshot.gitDiffLoading && snapshot.gitDiff ? <pre>{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre> : null}</div> : null}
+              {snapshot.selectedGitPath ? <div className="file-change-diff"><div className="file-change-diff-head"><span>{snapshot.gitDiffLoading ? '正在加载 diff…' : snapshot.gitDiff?.path}</span><small>{snapshot.selectedGitArea === 'staged' ? '暂存区' : '工作区'}</small></div>{!snapshot.gitDiffLoading && snapshot.gitDiff ? <pre>{snapshot.gitDiff.diff || '新建的未跟踪文件或二进制文件没有可展示的文本 diff。'}</pre> : null}</div> : null}
             </div>
           ) : tab === 'terminal' ? (
             <div className="file-terminal-view">

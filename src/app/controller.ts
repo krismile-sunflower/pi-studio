@@ -5,7 +5,9 @@ import { initialTransportUrl, PiTransport } from '../lib/transport';
 import type {
   DesktopSettings,
   ExtensionUiRequest,
+  GitChangeArea,
   GitFileDiff,
+  GitOperationResult,
   GitStatus,
   ImageAttachment,
   ModelInfo,
@@ -21,6 +23,8 @@ import type {
   PiInstance,
   PiMessage,
   PiRuntimeInfo,
+  PlanSessionState,
+  PlanStep,
   PiSession,
   PiUpdateResult,
   RpcEvent,
@@ -60,6 +64,16 @@ import {
   modelSupportsThinking,
   resolveModel,
 } from './session-model';
+import {
+  applyPlanControlMarkers,
+  canExecutePlan,
+  createPlanSessionState,
+  encodePlanCommandState,
+  normalizePlanSessionState,
+  planDraftPhase,
+  planStateFromEntries,
+  stripPlanControlMarkers,
+} from './plan-state';
 import type {
   LaunchResponse,
   ModelsResponse,
@@ -95,7 +109,6 @@ export class PiStudioController {
   private currentStreamingText = '';
   private currentStreamingThinking = '';
   private selectedSessionLiveOnly = false;
-  private isMirrorMode = false;
   private pendingPrompts: PendingPrompt[] = [];
   private sessionRefreshTimer: number | null = null;
   private pollTimer: number | null = null;
@@ -336,6 +349,7 @@ export class PiStudioController {
     appStore.update({
       selectedSessionFile: session.filePath,
       selectedSessionTitle: session.name || session.firstMessage || session.file || '当前会话',
+      plan: createPlanSessionState(),
       sessionTotalCost: 0,
       contextUsage: undefined,
       lastUsage: null,
@@ -362,7 +376,7 @@ export class PiStudioController {
 
   async newSession(): Promise<void> {
     const state = appStore.getSnapshot();
-    if (this.isMirrorMode || state.hasActivePiSession) {
+    if (this.usesMirrorTransport() || state.hasActivePiSession) {
       const generation = ++this.sessionSwitchGeneration;
       appStore.update({ sessionSwitching: true });
       const result = await this.rpcCommand<{ sessionFile?: string; entries?: SessionEntry[]; cancelled?: boolean }>(
@@ -379,6 +393,7 @@ export class PiStudioController {
         selectedSessionFile: sessionFile,
         activeSessionFile: sessionFile,
         selectedSessionTitle: '新会话',
+        plan: createPlanSessionState(),
         sessionTotalCost: 0,
         contextUsage: undefined,
         lastUsage: null,
@@ -440,6 +455,116 @@ export class PiStudioController {
       this.pendingPrompts = this.pendingPrompts.filter((item) => item.message !== prompt);
       this.addError(`发送失败：${String(error)}`);
       this.transport.forceReconnect();
+    }
+  }
+
+  /** Switch the active session into read-only planning without creating a chat message. */
+  async enterPlan(goal = ''): Promise<void> {
+    const state = appStore.getSnapshot();
+    if (state.isStreaming || state.sessionSwitching) return;
+    const alreadyPlanning = state.plan.phase === 'plan' || state.plan.phase === 'review';
+    // Do not silently discard a visible draft when the front end needs to
+    // re-assert Plan mode after a reconnect. `update` preserves its goal and
+    // steps, while a first entry starts a clean plan as expected.
+    const plan: PlanSessionState = alreadyPlanning
+      ? {
+          ...state.plan,
+          phase: planDraftPhase(state.plan.steps),
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          ...createPlanSessionState(),
+          phase: 'plan',
+          goal: goal.trim(),
+          updatedAt: new Date().toISOString(),
+        };
+    appStore.update({ plan });
+    const command = alreadyPlanning
+      ? `/pi-plan update ${encodePlanCommandState(plan)}`
+      : '/pi-plan enter';
+    if (!await this.sendPlanCommand(command)) this.restorePlanAfterCommandFailure(state.plan, plan);
+  }
+
+  /** Return to normal Build mode without adding a user-visible message. */
+  async enterBuild(): Promise<void> {
+    const state = appStore.getSnapshot();
+    if (state.isStreaming || state.sessionSwitching) return;
+    const plan = { ...state.plan, phase: 'build' as const, updatedAt: new Date().toISOString() };
+    appStore.update({ plan });
+    if (!await this.sendPlanCommand('/pi-plan build')) this.restorePlanAfterCommandFailure(state.plan, plan);
+  }
+
+  /** Save an edited plan. Any save deliberately requires a fresh confirmation. */
+  async updatePlan(value: Pick<PlanSessionState, 'goal' | 'steps'>): Promise<boolean> {
+    const state = appStore.getSnapshot();
+    if (state.isStreaming || state.sessionSwitching) return false;
+    const normalized = normalizePlanSessionState({
+      phase: planDraftPhase(value.steps),
+      goal: value.goal,
+      steps: value.steps,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!normalized) return false;
+    appStore.update({ plan: normalized });
+    const saved = await this.sendPlanCommand(`/pi-plan update ${encodePlanCommandState(normalized)}`);
+    if (!saved) this.restorePlanAfterCommandFailure(state.plan, normalized);
+    return saved;
+  }
+
+  /** Let the next prompt refine the current plan while keeping tools read-only. */
+  async revisePlan(): Promise<void> {
+    const state = appStore.getSnapshot();
+    if (state.isStreaming || state.sessionSwitching) return;
+    const plan = { ...state.plan, phase: 'plan' as const, updatedAt: new Date().toISOString() };
+    appStore.update({ plan });
+    if (!await this.sendPlanCommand('/pi-plan revise')) this.restorePlanAfterCommandFailure(state.plan, plan);
+  }
+
+  /** Start implementation immediately from the last reviewed plan. */
+  async executePlan(): Promise<void> {
+    const state = appStore.getSnapshot();
+    if (state.isStreaming || state.sessionSwitching || !canExecutePlan(state.plan)) return;
+    const firstPending = state.plan.steps.findIndex((step) => step.status === 'pending');
+    const steps: PlanStep[] = state.plan.steps.map((step, index) =>
+      index === firstPending ? { ...step, status: 'in_progress' } : step,
+    );
+    const plan = { ...state.plan, phase: 'executing' as const, steps, updatedAt: new Date().toISOString() };
+    appStore.update({ plan });
+    if (!await this.sendPlanCommand('/pi-plan execute')) this.restorePlanAfterCommandFailure(state.plan, plan);
+  }
+
+  private restorePlanAfterCommandFailure(previous: PlanSessionState, optimistic: PlanSessionState): void {
+    if (appStore.getSnapshot().plan === optimistic) appStore.update({ plan: previous });
+  }
+
+  private async sendPlanCommand(command: string): Promise<boolean> {
+    try {
+      // A `mirror_sync` is only a snapshot envelope: native RPC deliberately
+      // uses it too. Select the command channel from the configured transport,
+      // never from the last envelope we received.
+      if (this.usesMirrorTransport()) {
+        // Mirror's public prompt transport bypasses Pi's slash-command parser.
+        // Its extension relays this private event without creating a user message.
+        await this.sendPrompt({ type: 'pi_plan_command', command });
+        window.setTimeout(() => void this.syncCurrentHistory(), 160);
+      } else {
+        // Native RPC parses extension slash commands. Send through the request
+        // path so Pi's response is authoritative before reading session history;
+        // a plain stdin write races `get_entries` and made the mode appear stuck.
+        await this.ensureSelectedSessionIsActive();
+        const result = await this.rpcCommand(
+          { type: 'prompt', message: command, streamingBehavior: 'followUp' },
+          '',
+          true,
+        );
+        if (!result.success) throw new Error(result.error || 'Pi 未能切换计划模式');
+        await this.syncCurrentHistory();
+      }
+      return true;
+    } catch (error) {
+      this.addError(`计划模式操作失败：${String(error)}`);
+      this.transport.forceReconnect();
+      return false;
     }
   }
 
@@ -999,30 +1124,102 @@ export class PiStudioController {
   async loadGitStatus(): Promise<void> {
     const root = appStore.getSnapshot().workspace.path;
     if (!isDesktop || !root || appStore.getSnapshot().workspace.noFolder) {
-      appStore.update({ gitStatus: null, gitLoading: false, gitError: '请先打开一个本地项目。', selectedGitPath: null, gitDiff: null });
+      appStore.update({ gitStatus: null, gitLoading: false, gitError: '请先打开一个本地项目。', selectedGitPath: null, selectedGitArea: null, gitDiff: null });
       return;
     }
     appStore.update({ gitLoading: true, gitError: '' });
     try {
       const gitStatus = await invoke<GitStatus>('get_git_status', { path: root });
-      const selected = appStore.getSnapshot().selectedGitPath;
-      const stillExists = gitStatus.changes.some((change) => change.path === selected);
-      appStore.update({ gitStatus, gitLoading: false, selectedGitPath: stillExists ? selected : null, gitDiff: stillExists ? appStore.getSnapshot().gitDiff : null });
+      const current = appStore.getSnapshot();
+      const selected = current.selectedGitPath;
+      const selectedArea = current.selectedGitArea;
+      const stillExists = gitStatus.changes.some((change) => {
+        if (change.path !== selected || !selectedArea) return false;
+        return selectedArea === 'staged'
+          ? change.indexStatus !== ' ' && change.indexStatus !== '?'
+          : (change.indexStatus === '?' && change.worktreeStatus === '?') || change.worktreeStatus !== ' ';
+      });
+      appStore.update({ gitStatus, gitLoading: false, selectedGitPath: stillExists ? selected : null, selectedGitArea: stillExists ? selectedArea : null, gitDiff: stillExists ? current.gitDiff : null });
     } catch (error) {
-      appStore.update({ gitStatus: null, gitLoading: false, gitError: String(error), selectedGitPath: null, gitDiff: null });
+      appStore.update({ gitStatus: null, gitLoading: false, gitError: String(error), selectedGitPath: null, selectedGitArea: null, gitDiff: null });
     }
   }
 
-  async selectGitChange(filePath: string): Promise<void> {
+  async selectGitChange(filePath: string, area: GitChangeArea): Promise<void> {
     const root = appStore.getSnapshot().workspace.path;
     if (!isDesktop || !root) return;
-    appStore.update({ selectedGitPath: filePath, gitDiff: null, gitDiffLoading: true });
+    appStore.update({ selectedGitPath: filePath, selectedGitArea: area, gitDiff: null, gitDiffLoading: true });
     try {
-      const gitDiff = await invoke<GitFileDiff>('get_git_file_diff', { path: root, filePath });
-      if (appStore.getSnapshot().selectedGitPath === filePath) appStore.update({ gitDiff, gitDiffLoading: false });
+      const gitDiff = await invoke<GitFileDiff>('get_git_file_diff', { path: root, filePath, diffMode: area });
+      const current = appStore.getSnapshot();
+      if (current.selectedGitPath === filePath && current.selectedGitArea === area) appStore.update({ gitDiff, gitDiffLoading: false });
     } catch (error) {
-      if (appStore.getSnapshot().selectedGitPath === filePath) appStore.update({ gitDiff: { path: filePath, diff: `无法加载 diff：${String(error)}` }, gitDiffLoading: false });
+      const current = appStore.getSnapshot();
+      if (current.selectedGitPath === filePath && current.selectedGitArea === area) appStore.update({ gitDiff: { path: filePath, diff: `无法加载 diff：${String(error)}` }, gitDiffLoading: false });
     }
+  }
+
+  private async runGitOperation(
+    command: 'pull_git' | 'commit_git' | 'push_git' | 'stage_git_files' | 'stage_all_git' | 'unstage_git_files' | 'unstage_all_git',
+    payload: Record<string, unknown>,
+    failureTitle: string,
+  ): Promise<boolean> {
+    const state = appStore.getSnapshot();
+    const root = state.workspace.path;
+    if (!isDesktop || !root || state.workspace.noFolder) {
+      const message = '请先打开一个本地项目。';
+      appStore.update({ gitError: message, gitLoading: false });
+      notify(failureTitle, message, 'error');
+      return false;
+    }
+    appStore.update({ gitLoading: true, gitError: '' });
+    try {
+      const result = await invoke<GitOperationResult>(command, { path: root, ...payload });
+      await this.loadGitStatus();
+      notify(result.summary, result.output || 'Git 操作已完成。', 'success');
+      return true;
+    } catch (error) {
+      const message = String(error);
+      await this.loadGitStatus();
+      appStore.update({ gitLoading: false, gitError: message });
+      notify(failureTitle, message, 'error');
+      return false;
+    }
+  }
+
+  async pullGit(): Promise<boolean> {
+    return this.runGitOperation('pull_git', {}, '拉取失败');
+  }
+
+  async commitGit(message: string): Promise<boolean> {
+    const normalized = message.trim();
+    if (!normalized) {
+      const error = '请输入提交说明。';
+      appStore.update({ gitError: error });
+      notify('提交失败', error, 'error');
+      return false;
+    }
+    return this.runGitOperation('commit_git', { message: normalized }, '提交失败');
+  }
+
+  async stageGit(filePaths: string[]): Promise<boolean> {
+    return this.runGitOperation('stage_git_files', { filePaths }, '暂存失败');
+  }
+
+  async stageAllGit(): Promise<boolean> {
+    return this.runGitOperation('stage_all_git', {}, '暂存失败');
+  }
+
+  async unstageGit(filePaths: string[]): Promise<boolean> {
+    return this.runGitOperation('unstage_git_files', { filePaths }, '取消暂存失败');
+  }
+
+  async unstageAllGit(): Promise<boolean> {
+    return this.runGitOperation('unstage_all_git', {}, '取消暂存失败');
+  }
+
+  async pushGit(): Promise<boolean> {
+    return this.runGitOperation('push_git', {}, '推送失败');
   }
 
   async setAuth(enabled: boolean): Promise<void> {
@@ -1343,7 +1540,7 @@ export class PiStudioController {
       this.currentStreamingText = '';
       this.currentStreamingThinking = '';
       this.recordMessageToolCalls(message);
-      const text = getMessageText(message);
+      const text = stripPlanControlMarkers(getMessageText(message));
       const thinking = getMessageThinking(message);
       // A tool-only assistant message has no prose to render. Creating an
       // empty streaming message here used to leave a blank cursor/placeholder
@@ -1356,7 +1553,7 @@ export class PiStudioController {
       return;
     }
     if (message.role === 'user') {
-      const content = getMessageText(message);
+      const content = stripPlanControlMarkers(getMessageText(message));
       const alreadyLocal = this.pendingPrompts.some(
         (prompt) => normalizeMessageText(prompt.message) === normalizeMessageText(content),
       );
@@ -1370,7 +1567,7 @@ export class PiStudioController {
   }
 
   private async syncCurrentHistory(): Promise<void> {
-    if (this.isMirrorMode) {
+    if (this.usesMirrorTransport()) {
       this.transport.send({ type: 'mirror_sync_request' });
       return;
     }
@@ -1389,7 +1586,7 @@ export class PiStudioController {
     if (!update) return;
     this.recordMessageToolCalls(update.partial);
     if (!this.currentStreamingId) {
-      this.currentStreamingText = getMessageText(update.partial);
+      this.currentStreamingText = stripPlanControlMarkers(getMessageText(update.partial));
       this.currentStreamingThinking = getMessageThinking(update.partial);
     }
 
@@ -1401,10 +1598,10 @@ export class PiStudioController {
         update.content || getMessageThinking(update.partial) || this.currentStreamingThinking;
     } else if (update.type === 'text_delta') {
       this.currentStreamingText =
-        getMessageText(update.partial) || `${this.currentStreamingText}${update.delta || ''}`;
+        stripPlanControlMarkers(getMessageText(update.partial) || `${this.currentStreamingText}${update.delta || ''}`);
     } else if (update.type === 'text_end') {
       this.currentStreamingText =
-        update.content || getMessageText(update.partial) || this.currentStreamingText;
+        stripPlanControlMarkers(update.content || getMessageText(update.partial) || this.currentStreamingText);
     }
     if (!this.currentStreamingId && (this.currentStreamingText || this.currentStreamingThinking)) {
       this.currentStreamingId = this.appendMessage('assistant', this.currentStreamingText, {
@@ -1432,12 +1629,16 @@ export class PiStudioController {
       }
       return;
     }
-    if (message.role === 'assistant') this.recordMessageToolCalls(message);
+    if (message.role === 'assistant') {
+      this.recordMessageToolCalls(message);
+      const nextPlan = applyPlanControlMarkers(appStore.getSnapshot().plan, getMessageText(message));
+      if (nextPlan !== appStore.getSnapshot().plan) appStore.update({ plan: nextPlan });
+    }
     const error = assistantError(message);
     if (!this.currentStreamingId && message.role === 'assistant') {
       if (error) this.addError(error);
       else if (getMessageText(message) || getMessageThinking(message)) {
-        this.appendMessage('assistant', getMessageText(message), {
+        this.appendMessage('assistant', stripPlanControlMarkers(getMessageText(message)), {
           thinking: getMessageThinking(message),
           usage: message.usage,
         });
@@ -1455,7 +1656,7 @@ export class PiStudioController {
           streaming: false,
         });
       } else {
-        this.currentStreamingText = getMessageText(message) || this.currentStreamingText;
+        this.currentStreamingText = stripPlanControlMarkers(getMessageText(message) || this.currentStreamingText);
         this.currentStreamingThinking = getMessageThinking(message) || this.currentStreamingThinking;
         if (!this.currentStreamingText.trim() && !this.currentStreamingThinking.trim()) {
           this.removeTimelineItem(this.currentStreamingId);
@@ -1486,7 +1687,6 @@ export class PiStudioController {
   }
 
   private handleMirrorSync(snapshot: TransportEnvelope): void {
-    this.isMirrorMode = true;
     const activeFile = snapshot.sessionFile || null;
     const state = appStore.getSnapshot();
     // During an intentional session switch, ignore stale mirror snapshots for other sessions.
@@ -1522,6 +1722,11 @@ export class PiStudioController {
     if (snapshot.thinkingLevel) appStore.update({ thinkingLevel: snapshot.thinkingLevel });
 
     const entries = snapshot.entries || [];
+    const persistedPlan = planStateFromEntries(entries);
+    // A new or freshly resumed session can legitimately have no entries.
+    // Resetting here prevents one session's optimistic plan from bleeding into
+    // the next one, and makes a failed control command immediately retryable.
+    appStore.update({ plan: persistedPlan });
     const hasPending = this.pendingPrompts.some(
       (prompt) =>
         Date.now() - prompt.createdAt < 60_000 &&
@@ -1580,18 +1785,20 @@ export class PiStudioController {
     options: { allowEmptyWelcome?: boolean } = {},
   ): void {
     const next = buildHistoryTimeline(entries);
+    const plan = planStateFromEntries(entries);
     if (next.timeline.length === 0 && options.allowEmptyWelcome) {
       appStore.update({
         timeline: [],
         sessionTotalCost: 0,
         lastUsage: null,
         contextUsage: undefined,
+        plan,
         sessionSwitching: false,
       });
       this.addWelcome();
       return;
     }
-    appStore.update({ ...next, sessionSwitching: false });
+    appStore.update({ ...next, plan, sessionSwitching: false });
   }
 
   private isCurrentSessionSwitch(generation: number, sessionFile?: string | null): boolean {
@@ -1688,6 +1895,17 @@ export class PiStudioController {
   }
 
   private async sendPrompt(command: Record<string, unknown>): Promise<void> {
+    await this.ensureSelectedSessionIsActive();
+    const request = {
+      ...command,
+      id: uniqueId('pi-ui'),
+      streamingBehavior: 'followUp',
+    };
+    await this.transport.sendReliable(request);
+  }
+
+  /** Bring a selected persisted session back to Pi before sending an internal control. */
+  private async ensureSelectedSessionIsActive(): Promise<void> {
     const state = appStore.getSnapshot();
     if (
       state.selectedSessionFile &&
@@ -1696,12 +1914,11 @@ export class PiStudioController {
     ) {
       await this.resumeSession(state.selectedSessionFile);
     }
-    const request = {
-      ...command,
-      id: uniqueId('pi-ui'),
-      streamingBehavior: 'followUp',
-    };
-    if (!this.transport.send(request)) throw new Error('PiCode 尚未连接到 Pi');
+  }
+
+  /** Snapshot envelopes share a shape across transports; transport is the authority. */
+  private usesMirrorTransport(): boolean {
+    return window.tauDesktop.transport === 'mirror';
   }
 
   private async flushQueue(): Promise<void> {

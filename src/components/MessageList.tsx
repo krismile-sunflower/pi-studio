@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ExtensionUiRequest, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
+import type { ExtensionUiRequest, PlanSessionState, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
 import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
 import { formatTokens, totalContextTokens } from '../lib/utils';
 import { Icon } from './Icon';
 import { CopyMessageButton, Markdown } from './Markdown';
+import { canExecutePlan } from '../app/plan-state';
+
+const emptyPlan: PlanSessionState = {
+  phase: 'build',
+  goal: '',
+  steps: [],
+  updatedAt: new Date(0).toISOString(),
+};
 
 function usageText(usage?: Usage): string {
   if (!usage) return '';
@@ -47,20 +55,69 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
 }
 
 function Welcome() {
+  const starters = [
+    {
+      id: 'explore',
+      index: '01',
+      title: '理解这个项目',
+      description: '快速梳理结构、技术栈与运行方式。',
+      prompt: '帮我快速了解这个项目的结构、技术栈和运行方式。',
+    },
+    {
+      id: 'plan',
+      index: '02',
+      title: '规划一次改动',
+      description: '先确认影响范围，再拆分可执行步骤。',
+      prompt: '我想实现一个功能，请先分析影响范围并给出计划。',
+    },
+    {
+      id: 'debug',
+      index: '03',
+      title: '排查一个问题',
+      description: '描述现象，Pi 会协助定位原因与修复方向。',
+      prompt: '我遇到了一个问题，请帮助我定位原因并提出修复方案。',
+    },
+  ];
+
+  const prefillComposer = (prompt: string) => {
+    window.dispatchEvent(new CustomEvent('pi-studio:prefill-composer', { detail: { prompt } }));
+  };
+
   return (
-    <div className="welcome">
-      <div className="welcome-mark">
-        <img src="/icons/tau-192.png" alt="" className="tau-icon-welcome" />
+    <section className="welcome" aria-label="开始新会话">
+      <div className="welcome-inner">
+        <div className="welcome-intro">
+          <div className="welcome-mark">
+            <img src="/icons/tau-192.png" alt="" className="tau-icon-welcome" />
+          </div>
+          <span className="eyebrow">PiCode / new session</span>
+          <h1>把想法变成<br /><em>下一步行动。</em></h1>
+          <p className="hint">选择一个起点，或直接在下方描述你的任务。Pi 会保留必要的上下文，让工作自然地继续下去。</p>
+        </div>
+        <div className="welcome-starters" aria-label="常用起点">
+          {starters.map((starter) => (
+            <button
+              className={`welcome-starter welcome-starter-${starter.id}`}
+              key={starter.id}
+              type="button"
+              onClick={() => prefillComposer(starter.prompt)}
+            >
+              <span className="welcome-starter-index">{starter.index}</span>
+              <span className="welcome-starter-copy">
+                <strong>{starter.title}</strong>
+                <span>{starter.description}</span>
+              </span>
+              <span className="welcome-starter-arrow" aria-hidden="true">↗</span>
+            </button>
+          ))}
+        </div>
+        <div className="shortcuts-hint" aria-label="键盘快捷键">
+          <span><kbd>/</kbd> 聚焦输入框</span>
+          <span><kbd>⌘K</kbd> 打开命令</span>
+          <span><kbd>Esc</kbd> 停止生成</span>
+        </div>
       </div>
-      <span className="eyebrow">PiCode</span>
-      <h1>从一个问题开始</h1>
-      <p className="hint">与 Pi 协作理解代码、规划改动并完成任务。你也可以从左侧继续历史会话。</p>
-      <div className="shortcuts-hint">
-        <span><kbd>/</kbd> 聚焦输入框</span>
-        <span><kbd>⌘K</kbd> 打开命令</span>
-        <span><kbd>Esc</kbd> 停止生成</span>
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -373,22 +430,100 @@ function conversationPreview(message: RenderedMessage): string {
   return preview.length > 56 ? `${preview.slice(0, 56)}…` : preview || '空白用户消息';
 }
 
+function planPhaseLabel(phase: PlanSessionState['phase']): string {
+  return {
+    build: '构建模式',
+    plan: '正在规划',
+    review: '等待确认',
+    executing: '正在执行',
+    complete: '计划完成',
+  }[phase];
+}
+
+function PlanReviewCard({
+  plan,
+  streaming,
+  onEdit,
+  onContinue,
+  onExecute,
+}: {
+  plan: PlanSessionState;
+  streaming: boolean;
+  onEdit?(): void;
+  onContinue?(): void;
+  onExecute?(): void;
+}) {
+  const complete = plan.steps.filter((step) => step.status === 'complete').length;
+  const reviewable = plan.phase === 'plan' || plan.phase === 'review';
+  return (
+    <section className={`plan-review-card phase-${plan.phase}`} aria-label="计划审阅">
+      <div className="plan-review-card-head">
+        <div>
+          <span className="plan-review-kicker">PLAN / {plan.phase.toUpperCase()}</span>
+          <h2>{plan.phase === 'review' ? '请审阅这份计划' : planPhaseLabel(plan.phase)}</h2>
+        </div>
+        <span className={`plan-phase-badge ${plan.phase}`}>
+          <span aria-hidden="true" className="plan-phase-dot" />
+          {plan.phase === 'plan' || plan.phase === 'review' ? '只读' : planPhaseLabel(plan.phase)}
+        </span>
+      </div>
+      <p className={`plan-review-goal${plan.goal ? '' : ' muted'}`}>
+        {plan.goal || '正在等待 Agent 根据你的需求整理目标与步骤。'}
+      </p>
+      {plan.steps.length ? (
+        <ol className="plan-review-steps">
+          {plan.steps.map((step, index) => (
+            <li className={`plan-review-step ${step.status}`} key={step.id}>
+              <span className="plan-step-index">{step.status === 'complete' ? <Icon name="check" width={12} /> : index + 1}</span>
+              <span>
+                <strong>{step.title}</strong>
+                {step.detail ? <small>{step.detail}</small> : null}
+              </span>
+              <em>{step.status === 'in_progress' ? '进行中' : step.status === 'complete' ? '完成' : step.status === 'blocked' ? '受阻' : '待办'}</em>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="plan-review-empty">Agent 将在回复中生成带有步骤的 Plan，再由你确认是否执行。</div>
+      )}
+      <div className="plan-review-footer">
+        <span>{plan.steps.length ? `${complete} / ${plan.steps.length} 个步骤已完成` : '尚未生成有效步骤'}</span>
+        {reviewable ? (
+          <div className="plan-review-actions">
+            <button type="button" disabled={streaming} onClick={onEdit}>编辑计划</button>
+            <button type="button" disabled={streaming} onClick={onContinue}>继续规划</button>
+            <button className="plan-start-button" type="button" disabled={streaming || !canExecutePlan(plan)} onClick={onExecute}>开始执行 <span aria-hidden="true">→</span></button>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export function MessageList({
   timeline,
   streaming,
+  plan = emptyPlan,
   switching = false,
   extensionUiRequest,
   onDeleteMessage,
   onEditMessage,
   onRespondToExtension,
+  onEditPlan,
+  onContinuePlan,
+  onExecutePlan,
 }: {
   timeline: TimelineItem[];
   streaming: boolean;
+  plan?: PlanSessionState;
   switching?: boolean;
   extensionUiRequest?: ExtensionUiRequest | null;
   onDeleteMessage?(entryId: string): Promise<boolean>;
   onEditMessage?(message: RenderedMessage): void;
   onRespondToExtension?(request: ExtensionUiRequest, response: Record<string, unknown>): void;
+  onEditPlan?(): void;
+  onContinuePlan?(): void;
+  onExecutePlan?(): void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const conversationNodes = useRef(new Map<string, HTMLDivElement>());
@@ -567,6 +702,15 @@ export function MessageList({
             <ToolCard key={item.id} tool={item.tool} />
           ),
         )}
+        {plan.phase !== 'build' ? (
+          <PlanReviewCard
+            plan={plan}
+            streaming={streaming}
+            onEdit={onEditPlan}
+            onContinue={onContinuePlan}
+            onExecute={onExecutePlan}
+          />
+        ) : null}
         {permissionRequest && onRespondToExtension ? (
           <PermissionRequestCard request={permissionRequest} onRespond={onRespondToExtension} />
         ) : null}

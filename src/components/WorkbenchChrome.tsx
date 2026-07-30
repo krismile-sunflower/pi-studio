@@ -259,6 +259,7 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const slashListRef = useRef<HTMLDivElement>(null);
+  const planReadOnly = snapshot.plan.phase === 'plan' || snapshot.plan.phase === 'review';
   const knownFiles = useRef(new Set<string>());
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
@@ -337,6 +338,21 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
   }, [text]);
+
+  useEffect(() => {
+    const prefill = (event: Event) => {
+      const prompt = (event as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (!prompt) return;
+      setText(prompt);
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        textarea?.focus();
+        textarea?.setSelectionRange(prompt.length, prompt.length);
+      });
+    };
+    window.addEventListener('pi-studio:prefill-composer', prefill);
+    return () => window.removeEventListener('pi-studio:prefill-composer', prefill);
+  }, []);
 
   useEffect(() => {
     if (!editingMessage) return;
@@ -444,6 +460,12 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
     <div className="input-area">
       <div className="mobile-model-bar" />
       <div className="composer-shell">
+        {planReadOnly ? (
+          <div className="plan-readonly-guard" role="status">
+            <Icon name="shield" width={13} height={13} />
+            <span><strong>计划模式</strong> 只读分析中：可以探索与搜索，不能改动项目。</span>
+          </div>
+        ) : null}
         {editingMessage ? (
           <div className="composer-editing-banner">
             <span><Icon name="edit" width={13} height={13} /> 正在重新编辑最后一条消息</span>
@@ -539,6 +561,22 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
           </div>
           <div className="composer-toolbar">
             <div className="input-left-actions">
+              <div className="composer-mode-switch" role="group" aria-label="Agent 工作模式">
+                <button
+                  className={planReadOnly ? 'active' : ''}
+                  type="button"
+                  aria-pressed={planReadOnly}
+                  disabled={snapshot.isStreaming || snapshot.sessionSwitching}
+                  onClick={() => void controller.enterPlan()}
+                >计划</button>
+                <button
+                  className={!planReadOnly ? 'active' : ''}
+                  type="button"
+                  aria-pressed={!planReadOnly}
+                  disabled={snapshot.isStreaming || snapshot.sessionSwitching}
+                  onClick={() => void controller.enterBuild()}
+                >构建</button>
+              </div>
               <button className="input-icon-btn" type="button" title="命令（⌘K）" aria-label="打开命令" onClick={onOpenCommands}><span><Icon name="plus" /></span><span>命令</span></button>
               <button className="input-icon-btn" type="button" title="添加图片" aria-label="添加图片" onClick={() => imageInputRef.current?.click()}><Icon name="image" /><span>图片</span></button>
               <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={(event: ChangeEvent<HTMLInputElement>) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ''; }} />

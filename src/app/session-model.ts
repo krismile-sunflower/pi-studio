@@ -17,6 +17,7 @@ import {
   modelIdFromValue,
   totalContextTokens,
 } from '../lib/utils';
+import { stripPlanControlMarkers } from './plan-state';
 
 export function instanceTransport(instance?: PiInstance | null): 'rpc' | 'mirror' {
   return instance?.transport || (instance?.port ? 'mirror' : 'rpc');
@@ -128,7 +129,8 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
               };
             })
         : [];
-      if (getMessageText(message) || images.length) {
+      const content = stripPlanControlMarkers(getMessageText(message));
+      if (content || images.length) {
         // Stable keys prevent remount/jitter when history is re-rendered.
         const id = `history-${entryIndex}-user`;
         timeline.push({
@@ -138,7 +140,7 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
             id,
             sessionEntryId: typeof entry.id === 'string' ? entry.id : undefined,
             role: 'user',
-            content: getMessageText(message),
+            content,
             images,
             history: true,
           },
@@ -150,7 +152,8 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
     if (message.role === 'assistant') {
       const error = assistantError(message);
       const id = `history-${entryIndex}-assistant`;
-      if (error || getMessageText(message) || getMessageThinking(message)) {
+      const content = stripPlanControlMarkers(getMessageText(message));
+      if (error || content || getMessageThinking(message)) {
         timeline.push({
           id,
           kind: 'message',
@@ -158,7 +161,7 @@ export function buildHistoryTimeline(entries: SessionEntry[]): {
             id,
             sessionEntryId: typeof entry.id === 'string' ? entry.id : undefined,
             role: error ? 'error' : 'assistant',
-            content: error || getMessageText(message),
+            content: error || content,
             thinking: getMessageThinking(message),
             usage: message.usage,
             history: true,
