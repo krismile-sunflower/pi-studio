@@ -1,6 +1,14 @@
 import type { ExtensionUiRequest } from './types';
 
 const permissionRequestTitle = 'Pi 请求权限';
+const interactiveMethods = new Set(['select', 'confirm', 'input', 'editor']);
+
+/** Only these RPC extension methods require a blocking user response. */
+export function isInteractiveExtensionRequest(
+  request: ExtensionUiRequest | null | undefined,
+): boolean {
+  return Boolean(request && interactiveMethods.has(request.method));
+}
 
 export function isPermissionRequest(
   request: ExtensionUiRequest | null | undefined,

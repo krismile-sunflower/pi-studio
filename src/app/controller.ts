@@ -55,6 +55,7 @@ import {
   uniqueId,
 } from '../lib/utils';
 import { mergeSlashCommands } from '../lib/slash-commands';
+import { isInteractiveExtensionRequest } from '../lib/extension-ui';
 import { appStore } from './store';
 import {
   assistantError,
@@ -1520,9 +1521,20 @@ export class PiStudioController {
           content: `上下文已压缩${event.summary ? ` — ${event.summary}` : ''}`,
         });
         break;
-      case 'extension_ui_request':
-        appStore.update({ extensionUiRequest: event as ExtensionUiRequest });
+      case 'extension_ui_request': {
+        const request = event as ExtensionUiRequest;
+        if (isInteractiveExtensionRequest(request)) {
+          appStore.update({ extensionUiRequest: request });
+        } else if (request.method === 'notify') {
+          const message = String(request.message || '').trim();
+          const notifyType = request.notifyType;
+          const type = notifyType === 'success' || notifyType === 'error' || notifyType === 'warning'
+            ? notifyType
+            : 'info';
+          if (message) notify('扩展通知', message, type);
+        }
         break;
+      }
       case 'extension_error':
         this.addError(`扩展执行错误：${event.error || ''}`);
         break;

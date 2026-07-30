@@ -18,7 +18,7 @@ import type {
   SlashCommand,
   ToastMessage,
 } from '../lib/types';
-import { isPermissionRequest } from '../lib/extension-ui';
+import { isInteractiveExtensionRequest, isPermissionRequest } from '../lib/extension-ui';
 import { basename, formatTokens, shortModelName, totalContextTokens, uniqueId } from '../lib/utils';
 import {
   applySlashCompletion,
@@ -700,13 +700,13 @@ export function ExtensionDialog({ request }: { request: ExtensionUiRequest | nul
   const [value, setValue] = useState('');
   const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   useEffect(() => {
+    if (!request || !isInteractiveExtensionRequest(request)) return;
     setValue(String(request?.value || request?.defaultValue || request?.prefill || ''));
-    if (!request) return;
     const timeout = request.timeout ? window.setTimeout(() => controller.respondToExtension(request, { cancelled: true }), Number(request.timeout)) : null;
     window.requestAnimationFrame(() => fieldRef.current?.focus());
     return () => { if (timeout != null) window.clearTimeout(timeout); };
   }, [request]);
-  if (!request || isPermissionRequest(request)) return null;
+  if (!request || !isInteractiveExtensionRequest(request) || isPermissionRequest(request)) return null;
   const cancel = () => controller.respondToExtension(request, { cancelled: true });
   const title = request.title || ({ select: '请选择', confirm: '确认操作', input: '输入内容', editor: '编辑内容', notify: '扩展通知' } as Record<string, string>)[request.method] || '扩展请求';
   return (

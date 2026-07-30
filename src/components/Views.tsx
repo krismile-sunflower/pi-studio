@@ -1203,8 +1203,12 @@ export function CustomizationView({ snapshot }: { snapshot: AppSnapshot }) {
 }
 
 function PackageRow({ item, removing }: { item: PiPackageInfo; removing: boolean }) {
+  const installationStatus = `${item.installed ? `已安装${item.version ? ` · v${item.version}` : ''}` : '未检测到本地安装'} · ${item.enabled ? '已启用' : '已禁用'}`;
   return <div className="package-row">
-    <div className="package-main"><code>{item.source}</code><span>{item.enabled ? '已启用' : '已禁用'}</span></div>
+    <div className="package-main">
+      <div className="package-name-line"><code title={item.source}>{item.name || item.source}</code><span>{installationStatus}</span></div>
+      {item.description ? <p>{item.description}</p> : null}
+    </div>
     <button className="settings-action-btn danger" type="button" disabled={removing} onClick={() => {
       if (window.confirm(`移除 Pi 软件包“${item.source}”？`)) void controller.removePackage(item.source);
     }}>{removing ? '正在移除…' : '移除'}</button>

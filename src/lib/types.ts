@@ -235,6 +235,10 @@ export interface PiExtensionsCatalog {
 export interface PiPackageInfo {
   source: string;
   enabled: boolean;
+  name?: string;
+  version?: string;
+  description?: string;
+  installed: boolean;
 }
 
 export interface PiPackagesCatalog {
