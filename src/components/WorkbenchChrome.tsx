@@ -19,13 +19,23 @@ import type {
   ToastMessage,
 } from '../lib/types';
 import { isInteractiveExtensionRequest, isPermissionRequest } from '../lib/extension-ui';
-import { basename, formatTokens, shortModelName, totalContextTokens, uniqueId } from '../lib/utils';
+import {
+  basename,
+  extensionOf,
+  formatTokens,
+  imageExtensions,
+  parseImagePaths,
+  shortModelName,
+  totalContextTokens,
+  uniqueId,
+} from '../lib/utils';
 import {
   applySlashCompletion,
   fuzzyFilterCommands,
   matchSlashCommand,
 } from '../lib/slash-commands';
 import { controller } from '../app/controller';
+import { apiJson } from '../lib/desktop';
 import { Icon, type IconName } from './Icon';
 
 const thinkingLabels: Record<string, string> = {
@@ -241,6 +251,45 @@ async function processImage(file: File): Promise<ImageAttachment> {
   return { data, mimeType };
 }
 
+interface FileContentPayload {
+  kind: string;
+  name: string;
+  mimeType: string;
+  content?: string;
+  reason?: string;
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/') || imageExtensions.has(extensionOf(file.name));
+}
+
+// `items` and `files` overlap in most engines, but neither is reliable on its own inside
+// WKWebView (a Finder copy often exposes only one of them), so read both and de-duplicate.
+function collectImageFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files: File[] = [];
+  const seen = new Set<string>();
+  const push = (file: File | null) => {
+    if (!file || !isImageFile(file)) return;
+    const key = `${file.name}:${file.size}:${file.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  for (const item of Array.from(data.items || [])) {
+    if (item.kind === 'file') push(item.getAsFile());
+  }
+  for (const file of Array.from(data.files || [])) push(file);
+  return files;
+}
+
+function fileFromBase64(data: string, mimeType: string, name: string): File {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new File([bytes], name, { type: mimeType });
+}
+
 interface ComposerProps {
   snapshot: AppSnapshot;
   pendingFiles: FileAttachment[];
@@ -253,6 +302,8 @@ interface ComposerProps {
 export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile, onCancelEditing, onOpenCommands }: ComposerProps) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [attachingCount, setAttachingCount] = useState(0);
+  const [zoomedImage, setZoomedImage] = useState<ImageAttachment | null>(null);
   const [recording, setRecording] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -355,6 +406,15 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
   }, []);
 
   useEffect(() => {
+    if (!zoomedImage) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setZoomedImage(null);
+    };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [zoomedImage]);
+
+  useEffect(() => {
     if (!editingMessage) return;
     setText(editingMessage.text);
     setImages(editingMessage.images || []);
@@ -365,14 +425,40 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
     });
   }, [editingMessage]);
 
+  const reportAttachError = (title: string, error: unknown) => {
+    window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title, message: String(error instanceof Error ? error.message : error), type: 'error' } }));
+  };
+
   const addFiles = async (files: FileList | File[]) => {
-    for (const file of Array.from(files)) {
-      if (!file.type.startsWith('image/')) continue;
+    const list = Array.from(files).filter(isImageFile);
+    if (!list.length) return;
+    setAttachingCount((count) => count + list.length);
+    for (const file of list) {
       try {
         const processed = await processImage(file);
         setImages((current) => [...current, processed]);
       } catch (error) {
-        window.dispatchEvent(new CustomEvent('pi-studio:toast', { detail: { title: '图片处理失败', message: String(error), type: 'error' } }));
+        reportAttachError('图片处理失败', error);
+      } finally {
+        setAttachingCount((count) => Math.max(0, count - 1));
+      }
+    }
+  };
+
+  // Pasting/dropping an image file from Finder often yields only its path, so read the
+  // bytes back through the file API and attach them instead of littering the input.
+  const addImagePaths = async (paths: string[]) => {
+    setAttachingCount((count) => count + paths.length);
+    for (const path of paths) {
+      try {
+        const payload = await apiJson<FileContentPayload>(`/api/file/content?path=${encodeURIComponent(path)}`);
+        if (payload.kind !== 'image' || !payload.content) throw new Error(payload.reason || `无法读取图片：${path}`);
+        const processed = await processImage(fileFromBase64(payload.content, payload.mimeType, payload.name || basename(path)));
+        setImages((current) => [...current, processed]);
+      } catch (error) {
+        reportAttachError('读取图片失败', error);
+      } finally {
+        setAttachingCount((count) => Math.max(0, count - 1));
       }
     }
   };
@@ -408,6 +494,7 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
     }
     setText('');
     setImages([]);
+    setZoomedImage(null);
     setSlashOpen(false);
     pendingFiles.forEach((file) => onRemoveFile(file.path));
   };
@@ -417,19 +504,43 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
     onRemoveFile(file.path);
   };
 
+  const clearAttachments = () => {
+    setImages([]);
+    setZoomedImage(null);
+    pendingFiles.forEach(removeFile);
+  };
+
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file));
-    if (files.length) void addFiles(files);
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const files = collectImageFiles(clipboard);
+    if (files.length) {
+      // Without this the webview also drops the copied file's name/path into the textarea.
+      event.preventDefault();
+      void addFiles(files);
+      return;
+    }
+    const paths = parseImagePaths(clipboard.getData('text/plain'));
+    if (paths.length) {
+      event.preventDefault();
+      void addImagePaths(paths);
+    }
   };
 
   const handleDrop = (event: DragEvent<HTMLTextAreaElement>) => {
     event.preventDefault();
-    if (event.dataTransfer.files.length) void addFiles(event.dataTransfer.files);
-    const path = event.dataTransfer.getData('text/plain');
-    if (path && !event.dataTransfer.files.length) setText((value) => `${value}${value ? ' ' : ''}${path} `);
+    const files = collectImageFiles(event.dataTransfer);
+    if (files.length) {
+      void addFiles(files);
+      return;
+    }
+    const dropped = event.dataTransfer.getData('text/plain');
+    const paths = parseImagePaths(dropped);
+    if (paths.length) {
+      void addImagePaths(paths);
+      return;
+    }
+    if (dropped) setText((value) => `${value}${value ? ' ' : ''}${dropped} `);
   };
 
   const toggleRecording = () => {
@@ -458,6 +569,12 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
 
   return (
     <div className="input-area">
+      {zoomedImage ? (
+        <div className="attachment-lightbox" role="dialog" aria-modal="true" aria-label="附件预览" onClick={() => setZoomedImage(null)}>
+          <img src={`data:${zoomedImage.mimeType};base64,${zoomedImage.data}`} alt="附件预览" />
+          <button className="attachment-lightbox-close" type="button" aria-label="关闭预览"><Icon name="close" width={14} height={14} /></button>
+        </div>
+      ) : null}
       <div className="mobile-model-bar" />
       <div className="composer-shell">
         {planReadOnly ? (
@@ -477,10 +594,35 @@ export function Composer({ snapshot, pendingFiles, editingMessage, onRemoveFile,
             {snapshot.queue.map((item) => <div className="queued-msg" key={item.id}><span className="queued-msg-label">排队中</span><span className="queued-msg-text">{item.message}</span><button className="queued-msg-cancel" type="button" title="取消排队" onClick={() => controller.cancelQueuedMessage(item.id)}>×</button></div>)}
           </div>
         ) : null}
-        {images.length || pendingFiles.length ? (
-          <div className="image-previews">
-            {images.map((image, index) => <div className="image-preview" key={`${image.data.slice(0, 20)}-${index}`}><img src={`data:${image.mimeType};base64,${image.data}`} alt={`待发送图片 ${index + 1}`} /><button className="image-preview-remove" type="button" aria-label="移除附件" onClick={() => setImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}>×</button></div>)}
-            {pendingFiles.map((file) => <div className="image-preview file-chip" title={file.path} key={file.path}><span className="file-chip-icon">{file.ext ? file.ext.slice(0, 3).toUpperCase() : 'FILE'}</span><span className="file-chip-name">{file.name}</span><button className="image-preview-remove" type="button" aria-label="移除附件" onClick={() => removeFile(file)}>×</button></div>)}
+        {images.length || pendingFiles.length || attachingCount ? (
+          <div className="composer-attachments">
+            <div className="composer-attachments-head">
+              <span className="composer-attachments-title">
+                <Icon name="image" width={12} height={12} />
+                附件 {images.length + pendingFiles.length}
+                {attachingCount ? <em className="composer-attachments-busy">正在处理 {attachingCount}…</em> : null}
+              </span>
+              <button type="button" onClick={clearAttachments}>清空</button>
+            </div>
+            <div className="composer-attachment-list">
+              {images.map((image, index) => (
+                <div className="attachment-card" key={`${image.data.slice(0, 24)}-${index}`}>
+                  <button className="attachment-thumb" type="button" title="点击查看大图" onClick={() => setZoomedImage(image)}>
+                    <img src={`data:${image.mimeType};base64,${image.data}`} alt={`待发送图片 ${index + 1}`} />
+                    <span className="attachment-zoom"><Icon name="eye" width={13} height={13} /></span>
+                  </button>
+                  <button className="attachment-remove" type="button" aria-label={`移除图片 ${index + 1}`} onClick={() => setImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><Icon name="close" width={9} height={9} /></button>
+                </div>
+              ))}
+              {pendingFiles.map((file) => (
+                <div className="attachment-card attachment-file" title={file.path} key={file.path}>
+                  <span className="attachment-file-ext">{file.ext ? file.ext.slice(0, 4).toUpperCase() : 'FILE'}</span>
+                  <span className="attachment-file-name">{file.name}</span>
+                  <button className="attachment-remove" type="button" aria-label={`移除文件 ${file.name}`} onClick={() => removeFile(file)}><Icon name="close" width={9} height={9} /></button>
+                </div>
+              ))}
+              {Array.from({ length: attachingCount }, (_, index) => <div className="attachment-card attachment-loading" key={`attaching-${index}`} aria-hidden="true" />)}
+            </div>
           </div>
         ) : null}
         <form id="chat-form" onSubmit={(event) => void submit(event)}>

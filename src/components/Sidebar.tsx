@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiJson, postJson } from '../lib/desktop';
-import type { AppSnapshot, PiSession, SessionProject } from '../lib/types';
+import { postJson } from '../lib/desktop';
+import type { AppSnapshot, PiSession, SessionProject, WorkspaceView } from '../lib/types';
 import { basename, formatRelativeTime } from '../lib/utils';
 import { controller } from '../app/controller';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 
 interface SidebarProps {
   snapshot: AppSnapshot;
@@ -18,6 +18,12 @@ interface ContextMenuState {
   session: PiSession;
   project: SessionProject;
 }
+
+const NAV_ITEMS: Array<{ view: WorkspaceView; icon: IconName; label: string }> = [
+  { view: 'projects', icon: 'grid', label: '项目' },
+  { view: 'customization', icon: 'download', label: '定制' },
+  { view: 'settings', icon: 'settings', label: '设置' },
+];
 
 function projectKey(project: SessionProject): string {
   return project.noFolder ? '__no_folder__' : project.dirName || project.path || '';
@@ -157,28 +163,28 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
           setContextMenu({ x: event.clientX, y: event.clientY, session, project });
         }}
       >
-        <div className="session-title-row">
-          {favorites.includes(session.filePath) ? <span className="session-fav-icon">★</span> : null}
-          {renaming === session.filePath ? (
-            <input
-              className="session-rename-input"
-              autoFocus
-              defaultValue={sessionTitle(session)}
-              onClick={(event) => event.stopPropagation()}
-              onBlur={(event) => void renameSession(session, event.currentTarget.value)}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') event.currentTarget.blur();
-                if (event.key === 'Escape') setRenaming(null);
-              }}
-            />
-          ) : (
-            <div className="session-title" title={sessionTitle(session)}>{sessionTitle(session)}</div>
-          )}
-          {session.live ? <span className="session-tag live-tag">live</span> : null}
-          {session.tmux ? <span className="session-tag tmux-tag">tmux</span> : null}
-        </div>
-        <div className="session-meta">{formatRelativeTime(session.timestamp)}</div>
+        {favorites.includes(session.filePath) ? <span className="session-fav-icon">★</span> : null}
+        {renaming === session.filePath ? (
+          <input
+            className="session-rename-input"
+            autoFocus
+            defaultValue={sessionTitle(session)}
+            onClick={(event) => event.stopPropagation()}
+            onBlur={(event) => void renameSession(session, event.currentTarget.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter') event.currentTarget.blur();
+              if (event.key === 'Escape') setRenaming(null);
+            }}
+          />
+        ) : (
+          <>
+            <span className="session-title" title={sessionTitle(session)}>{sessionTitle(session)}</span>
+            {session.live ? <span className="session-tag live-tag">live</span> : null}
+            {session.tmux ? <span className="session-tag tmux-tag">tmux</span> : null}
+            <span className="session-meta">{formatRelativeTime(session.timestamp)}</span>
+          </>
+        )}
       </div>
     );
   };
@@ -193,37 +199,29 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
   return (
     <>
       <aside className={`sidebar${open ? '' : ' collapsed'}`} id="sidebar" aria-label="会话导航">
-        <div className="sidebar-brand">
-          <div className="mode-toggle">
-            <button className={`mode-link${snapshot.view === 'chat' ? ' active' : ''}`} type="button" onClick={() => controller.returnToChat()} aria-label="返回聊天">
-              <img src="/icons/tau-192.png" alt="" className="tau-icon" />
-            </button>
-          </div>
-          <div className="brand-copy"><strong>PiCode</strong><span>AI 开发工作台</span></div>
+        <header className="sidebar-head">
+          <button className="workspace-chip" type="button" title={`${workspaceLabel} · ${workspacePath}`} onClick={() => controller.setView('projects')}>
+            <img src="/icons/tau-192.png" alt="" className="tau-icon" />
+            <span className="workspace-chip-name">{workspaceLabel}</span>
+            <Icon name="chevron" className="workspace-chip-chevron" width={13} height={13} />
+          </button>
           <button className="icon-btn sidebar-collapse-btn" type="button" onClick={onToggle} title={open ? '折叠会话栏' : '展开会话栏'} aria-expanded={open}>
-            <Icon name="arrow-left" />
+            <Icon name="arrow-left" width={15} height={15} />
+          </button>
+        </header>
+
+        <div className="sidebar-search-row">
+          <label className="sidebar-search">
+            <Icon name="search" width={13} height={13} />
+            <input type="search" className="sidebar-search-input" placeholder="搜索会话" value={query} onChange={(event) => setQuery(event.target.value)} />
+          </label>
+          <button className="sidebar-quick-btn" type="button" title="刷新会话" aria-label="刷新会话" onClick={() => void controller.loadSessions()}>
+            <Icon name="refresh" width={14} height={14} />
+          </button>
+          <button className="sidebar-quick-btn primary" type="button" title="新建会话 ⌘N" aria-label="新建会话" onClick={() => void controller.newSession()}>
+            <Icon name="plus" width={15} height={15} />
           </button>
         </div>
-
-        <button className="project-switcher" type="button" title={workspacePath} onClick={() => controller.setView('projects')}>
-          <span className="project-switcher-icon"><Icon name="folder" width={15} height={15} /></span>
-          <span className="project-switcher-copy"><strong>{workspaceLabel}</strong><span>{workspacePath}</span></span>
-          <Icon name="chevron" className="project-switcher-chevron" width={14} height={14} />
-        </button>
-
-        <div className="sidebar-primary-actions">
-          <button className="new-session-btn" type="button" onClick={() => void controller.newSession()}>
-            <Icon name="plus" width={15} height={15} /><span>新建会话</span><kbd>⌘N</kbd>
-          </button>
-          <button className="icon-btn" type="button" title="刷新会话" aria-label="刷新会话" onClick={() => void controller.loadSessions()}>
-            <Icon name="refresh" width={15} height={15} />
-          </button>
-        </div>
-
-        <label className="sidebar-search">
-          <Icon name="search" width={14} height={14} />
-          <input type="search" className="sidebar-search-input" placeholder="搜索会话内容" value={query} onChange={(event) => setQuery(event.target.value)} />
-        </label>
 
         <div className="session-list" id="session-list">
           {/* Only show skeleton on first empty load — never flash over an existing list. */}
@@ -285,9 +283,23 @@ export function Sidebar({ snapshot, open, onToggle, onClose }: SidebarProps) {
         </div>
 
         <nav className="sidebar-footer" aria-label="工作台导航">
-          <button className={`sidebar-nav-item${snapshot.view === 'projects' ? ' active' : ''}`} type="button" onClick={() => controller.setView('projects')}><Icon name="grid" width={17} height={17} /><span>项目</span></button>
-          <button className={`sidebar-nav-item${snapshot.view === 'customization' ? ' active' : ''}`} type="button" onClick={() => controller.setView('customization')}><Icon name="download" width={17} height={17} /><span>定制</span></button>
-          <button className={`sidebar-nav-item${snapshot.view === 'settings' ? ' active' : ''}`} type="button" onClick={() => controller.setView('settings')}><Icon name="settings" width={17} height={17} /><span>设置</span></button>
+          {NAV_ITEMS.map(({ view, icon, label }) => {
+            const active = snapshot.view === view;
+            return (
+              <button
+                className={`sidebar-nav-item${active ? ' active' : ''}`}
+                type="button"
+                key={view}
+                aria-current={active ? 'page' : undefined}
+                // Re-clicking the active destination goes back to the conversation —
+                // the app mark used to be the only way home.
+                title={active ? '返回聊天' : label}
+                onClick={() => (active ? controller.returnToChat() : controller.setView(view))}
+              >
+                <Icon name={icon} width={15} height={15} /><span>{label}</span>
+              </button>
+            );
+          })}
         </nav>
       </aside>
       <div className={`sidebar-overlay${open ? ' visible' : ''}`} onClick={onClose} />

@@ -130,6 +130,12 @@ export interface ToolExecution {
   output: string;
   isError?: boolean;
   history?: boolean;
+  /**
+   * Structured `details` a tool attaches to its result, when it has any. Pi
+   * streams this on tool events but does not persist it in session files, so it
+   * is present for live runs only. `pi-subagents` uses it for child progress.
+   */
+  resultDetails?: Record<string, unknown>;
 }
 
 export type TimelineItem =
@@ -244,6 +250,31 @@ export interface PiPackageInfo {
 export interface PiPackagesCatalog {
   settingsPath: string;
   packages: PiPackageInfo[];
+}
+
+/**
+ * A Pi prompt template: a Markdown file whose filename becomes the `/name`
+ * command, with optional `description` / `argument-hint` frontmatter.
+ */
+export interface PiPromptTemplate {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  body: string;
+  filePath: string;
+  /** Where Pi discovered it. Only `user` and `project` are writable. */
+  scope: 'user' | 'project' | 'package' | string;
+  /** Package name for package-provided templates. */
+  origin: string;
+  editable: boolean;
+}
+
+export interface PiPromptCatalog {
+  userDir: string;
+  projectDir?: string | null;
+  /** Pi ignores project templates until the project has been trusted. */
+  projectTrusted: boolean;
+  templates: PiPromptTemplate[];
 }
 
 export interface PiPackageCatalogItem {
@@ -521,6 +552,10 @@ export interface AppSnapshot {
   packageSearchResults: PiPackageCatalogItem[];
   packageSearchLoading: boolean;
   packageSearchError: string;
+  prompts: PiPromptCatalog | null;
+  promptsLoading: boolean;
+  promptError: string;
+  promptSaving: boolean;
   settings: DesktopSettings | null;
   runtimeInfo: PiRuntimeInfo | null;
   autostartEnabled: boolean;

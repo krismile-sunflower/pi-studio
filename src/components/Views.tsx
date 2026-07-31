@@ -8,6 +8,7 @@ import type {
   ModelsProviderModel,
   PiExtensionInfo,
   PiPackageInfo,
+  PiPromptTemplate,
   ProjectInfo,
   ThemeId,
 } from '../lib/types';
@@ -97,16 +98,16 @@ export function ProjectsView({ snapshot }: { snapshot: AppSnapshot }) {
   return (
     <section className="launcher workspace-view" aria-label="项目">
       <div className="launcher-content">
-        <div className="launcher-title-row">
-          <div className="launcher-heading">
+        <div className="pane-header">
+          <div className="pane-header-copy">
             <span className="eyebrow">工作区</span>
-            <h2 className="launcher-title">项目</h2>
-            <p className="launcher-subtitle">选择一个项目启动 Pi，或进入无文件夹模式直接开始。</p>
+            <h2>项目</h2>
+            <p className="pane-header-subtitle">选择一个项目启动 Pi，或进入无文件夹模式直接开始。</p>
           </div>
-          <div className="launcher-title-actions">
+          <div className="pane-header-actions">
             <button className="launcher-action" type="button" onClick={() => snapshot.noFolderActive ? controller.returnToChat() : void controller.launchNoFolder()}>无文件夹模式</button>
             <button className="launcher-action primary" type="button" onClick={() => void controller.addProject()}>添加项目</button>
-            {snapshot.hasActivePiSession ? <button className="launcher-close" type="button" title="返回聊天" aria-label="返回聊天" onClick={() => controller.returnToChat()}><Icon name="close" width={15} height={15} /></button> : null}
+            {snapshot.hasActivePiSession ? <button className="pane-close" type="button" title="返回聊天" aria-label="返回聊天" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button> : null}
           </div>
         </div>
         {snapshot.projectError ? <div className="launcher-error">{snapshot.projectError}</div> : null}
@@ -218,18 +219,18 @@ export function ChangesView({ snapshot }: { snapshot: AppSnapshot }) {
   };
   return (
     <section className="changes-panel workspace-view">
-      <div className="settings-header changes-header">
-        <div className="settings-header-copy">
+      <div className="pane-header changes-header">
+        <div className="pane-header-copy">
           <span className="eyebrow">工作区</span>
-          <div className="settings-title-row">
-            <h3>Git 变更</h3>
-            <button className="settings-close" type="button" aria-label="关闭变更中心" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button>
-          </div>
-          <p className="settings-subtitle">审阅并暂存改动，再提交暂存区内容或同步当前分支。</p>
+          <h2>Git 变更</h2>
+          <p className="pane-header-subtitle">审阅并暂存改动，再提交暂存区内容或同步当前分支。</p>
         </div>
-        <button className="settings-action-btn" type="button" onClick={() => void controller.loadGitStatus()} disabled={busy}>
-          {snapshot.gitLoading ? '刷新中…' : '刷新'}
-        </button>
+        <div className="pane-header-actions">
+          <button className="settings-action-btn" type="button" onClick={() => void controller.loadGitStatus()} disabled={busy}>
+            {snapshot.gitLoading ? '刷新中…' : '刷新'}
+          </button>
+          <button className="pane-close" type="button" aria-label="关闭变更中心" title="关闭变更中心" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button>
+        </div>
       </div>
 
       {snapshot.gitError ? <div className="changes-notice error">{snapshot.gitError}</div> : null}
@@ -302,37 +303,81 @@ function runtimeSource(snapshot: AppSnapshot): string {
   return ({ system: '系统安装', override: '自定义路径', web: 'Web 模式', unknown: '未知' } as Record<string, string>)[info.source || 'unknown'] || info.source || '未知';
 }
 
+const SETTINGS_SECTIONS = [
+  ['appearance', '外观', '主题与界面外观'],
+  ['agent', '智能体', 'Pi 的思考与上下文行为'],
+  ['permissions', '权限', '工具执行授权与项目信任'],
+  ['models', '模型', 'API 供应商、模型与推理预设'],
+  ['runtime', '运行时', 'Pi 运行时、桌面端与连接'],
+] as const;
+
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number][0];
+
+const SETTINGS_SECTION_KEY = 'pi-studio:settings-section';
+
+function initialSettingsSection(): SettingsSection {
+  const saved = localStorage.getItem(SETTINGS_SECTION_KEY);
+  return SETTINGS_SECTIONS.some(([id]) => id === saved) ? (saved as SettingsSection) : 'appearance';
+}
+
 export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
   const [theme, setTheme] = useState<ThemeId>(() => getCurrentTheme());
+  const [section, setSection] = useState<SettingsSection>(initialSettingsSection);
   const info = snapshot.runtimeInfo;
   const canUpdate = Boolean(info?.canUpdateSystem || info?.canUpdateBundled);
+  const current = SETTINGS_SECTIONS.find(([id]) => id === section) || SETTINGS_SECTIONS[0];
+
+  const selectSection = (next: SettingsSection) => {
+    setSection(next);
+    localStorage.setItem(SETTINGS_SECTION_KEY, next);
+  };
+
   return (
     <section className="settings-panel workspace-view">
-      <div className="settings-header">
-        <div className="settings-header-copy">
-          <span className="eyebrow">偏好设置</span>
-          <div className="settings-title-row">
-            <h3>设置</h3>
-            <button className="settings-close" type="button" aria-label="关闭设置" onClick={() => controller.returnToChat()}>
-              <Icon name="close" width={16} height={16} />
+      <div className="pane-layout">
+        <nav className="pane-nav" aria-label="设置分类">
+          <div className="pane-nav-title">设置</div>
+          {SETTINGS_SECTIONS.map(([id, label]) => (
+            <button
+              className={`pane-nav-item${section === id ? ' active' : ''}`}
+              type="button"
+              key={id}
+              aria-current={section === id ? 'page' : undefined}
+              onClick={() => selectSection(id)}
+            >
+              {label}
             </button>
-          </div>
-          <p className="settings-subtitle">外观、权限、模型提供商、Pi 运行时与桌面行为</p>
-        </div>
-      </div>
+          ))}
+        </nav>
 
-      <div className="settings-body">
-        <div className="settings-group">
-          <div className="settings-group-label">常规</div>
-          <div className="settings-grid settings-grid-3">
-            <div className="settings-section">
-              <div className="settings-section-title">外观</div>
+        <div className="pane-content">
+          <div className="pane-header">
+            <div className="pane-header-copy">
+              <h2>{current[1]}</h2>
+              <p className="pane-header-subtitle">{current[2]}</p>
+            </div>
+            <div className="pane-header-actions">
+              <button className="pane-close" type="button" aria-label="关闭设置" title="关闭设置" onClick={() => controller.returnToChat()}>
+                <Icon name="close" width={16} height={16} />
+              </button>
+            </div>
+          </div>
+
+          {section === 'appearance' ? (
+            <div className="pane-section">
+              <div className="pane-section-head">
+                <div>
+                  <div className="pane-section-title">主题</div>
+                  <p className="pane-section-note">切换后立即生效，并同步桌面端窗口标题栏。</p>
+                </div>
+              </div>
               <div className="theme-grid">
                 {(Object.entries(themes) as Array<[ThemeId, (typeof themes)[ThemeId]]>).map(([id, value]) => (
                   <button
                     className={`theme-swatch${theme === id ? ' active' : ''}`}
                     data-label={value.name}
                     aria-label={`切换为${value.name}主题`}
+                    aria-pressed={theme === id}
                     type="button"
                     key={id}
                     onClick={() => { setTheme(applyTheme(id)); }}
@@ -344,9 +389,16 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
                 ))}
               </div>
             </div>
+          ) : null}
 
-            <div className="settings-section">
-              <div className="settings-section-title">智能体</div>
+          {section === 'agent' ? (
+            <div className="pane-section">
+              <div className="pane-section-head">
+                <div>
+                  <div className="pane-section-title">对话行为</div>
+                  <p className="pane-section-note">这些设置立即应用到当前会话。</p>
+                </div>
+              </div>
               <div className="settings-row">
                 <span className="settings-label">自动压缩上下文</span>
                 <Toggle enabled={snapshot.autoCompactionEnabled} label="自动压缩上下文" onChange={(enabled) => void controller.setAutoCompaction(enabled)} />
@@ -362,135 +414,137 @@ export function SettingsView({ snapshot }: { snapshot: AppSnapshot }) {
                 <Toggle enabled={snapshot.showThinking} label="显示思考过程" onChange={(enabled) => controller.setShowThinking(enabled)} />
               </div>
             </div>
+          ) : null}
 
-            <div className="settings-section">
-              <div className="settings-section-title">桌面端</div>
-              <div className="settings-row">
-                <span className="settings-label">开机自动启动</span>
-                <Toggle enabled={snapshot.autostartEnabled} label="开机自动启动" disabled={!window.tauDesktop.isTauri} onChange={(enabled) => void controller.setAutostart(enabled)} />
-              </div>
-              <div className="settings-row">
-                <span className="settings-label">连接方式</span>
-                <button className="settings-value-btn" type="button" disabled>
-                  {!window.tauDesktop.isTauri ? 'Web 模式' : window.tauDesktop.transport === 'mirror' ? String(snapshot.settings?.tauPort || 3001) : '原生 RPC'}
-                </button>
-              </div>
-              {snapshot.authConfigured ? (
-                <div className="settings-row">
-                  <span className="settings-label">需要登录</span>
-                  <Toggle enabled={snapshot.authEnabled} label="需要登录" onChange={(enabled) => void controller.setAuth(enabled)} />
+          {section === 'permissions' ? (
+            <div className="pane-section">
+              <div className="pane-section-head">
+                <div>
+                  <div className="pane-section-title">工具执行权限</div>
+                  <p className="pane-section-note">控制 Pi 读取、修改文件和运行命令时的授权方式；变更会立即应用到当前会话。</p>
                 </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-group-label">权限</div>
-          <div className="settings-section settings-section-wide">
-            <div className="settings-section-title-row">
-              <div>
-                <div className="settings-section-title">工具执行权限</div>
-                <p className="settings-help settings-help-inline">控制 Pi 读取、修改文件和运行命令时的授权方式；变更会立即应用到当前会话。</p>
               </div>
+              <div className="permission-mode-grid" role="radiogroup" aria-label="Pi 工具执行权限">
+                {([
+                  ['ask', '请求确认', '读取和搜索自动允许；修改文件或执行命令前询问。'],
+                  ['read-only', '只读', '仅允许读取、搜索和列出文件；阻止修改及命令执行。'],
+                  ['full-access', '完全访问', '不显示确认，直接执行 Pi 的全部工具操作。'],
+                ] as const).map(([mode, title, description]) => {
+                  const active = (snapshot.settings?.permissionMode || 'ask') === mode;
+                  return (
+                    <button
+                      className={`permission-mode-card${active ? ' active' : ''}${mode === 'full-access' ? ' caution' : ''}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      key={mode}
+                      disabled={!window.tauDesktop.isTauri || !snapshot.settings}
+                      onClick={() => void controller.setPermissionMode(mode)}
+                    >
+                      <span className="permission-mode-title">{title}</span>
+                      <span className="permission-mode-description">{description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="trust-row">
+                <div className="trust-copy">
+                  <strong>项目可信任</strong>
+                  <span title={snapshot.workspace.path || undefined}>
+                    {snapshot.workspace.noFolder || !snapshot.workspace.path
+                      ? '无文件夹会话不加载项目级 .pi 资源。'
+                      : '可信任后，Pi 可加载此项目中的 .pi 设置、扩展与技能。'}
+                  </span>
+                </div>
+                {snapshot.workspace.noFolder || !snapshot.workspace.path ? null : (() => {
+                  const trusted = (snapshot.settings?.trustedProjectPaths || []).includes(snapshot.workspace.path);
+                  return <button className={`settings-action-btn${trusted ? ' danger' : ' primary'}`} type="button" onClick={() => void controller.setProjectTrusted(snapshot.workspace.path, !trusted)}>
+                    {trusted ? '撤销可信任' : '信任此项目'}
+                  </button>;
+                })()}
+              </div>
+              {!snapshot.workspace.noFolder && snapshot.workspace.path ? <p className="settings-help">项目可信任变更会在下次启动该项目的 Pi 会话时生效。</p> : null}
             </div>
-            <div className="permission-mode-grid" role="radiogroup" aria-label="Pi 工具执行权限">
-              {([
-                ['ask', '请求确认', '读取和搜索自动允许；修改文件或执行命令前询问。'],
-                ['read-only', '只读', '仅允许读取、搜索和列出文件；阻止修改及命令执行。'],
-                ['full-access', '完全访问', '不显示确认，直接执行 Pi 的全部工具操作。'],
-              ] as const).map(([mode, title, description]) => {
-                const active = (snapshot.settings?.permissionMode || 'ask') === mode;
-                return (
-                  <button
-                    className={`permission-mode-card${active ? ' active' : ''}${mode === 'full-access' ? ' caution' : ''}`}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    key={mode}
-                    disabled={!window.tauDesktop.isTauri || !snapshot.settings}
-                    onClick={() => void controller.setPermissionMode(mode)}
-                  >
-                    <span className="permission-mode-title">{title}</span>
-                    <span className="permission-mode-description">{description}</span>
+          ) : null}
+
+          {section === 'models' ? <ModelsProvidersSection snapshot={snapshot} /> : null}
+
+          {section === 'runtime' ? (
+            <>
+              <div className="pane-section">
+                <div className="pane-section-head">
+                  <div>
+                    <div className="pane-section-title">Pi 运行时</div>
+                    <p className="pane-section-note">检测版本、更新系统安装或内置 sidecar。</p>
+                  </div>
+                  <div className="pane-section-actions">
+                    <button className="settings-action-btn" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating} onClick={() => void controller.checkPiUpdate()}>
+                      检查更新
+                    </button>
+                    <button className="settings-action-btn primary" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating || !canUpdate} onClick={() => void controller.updatePiRuntime()}>
+                      {snapshot.piUpdating ? '正在更新…' : '更新 Pi'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-kv-grid">
+                  <div className="settings-kv">
+                    <span className="settings-kv-label">来源</span>
+                    <span className={`settings-kv-value${info?.bundled || ['system', 'override'].includes(info?.source || '') ? ' ok' : ' warn'}`}>{runtimeSource(snapshot)}</span>
+                  </div>
+                  <div className="settings-kv">
+                    <span className="settings-kv-label">当前版本</span>
+                    <span className="settings-kv-value">{info?.piVersion || '不可用'}</span>
+                  </div>
+                  <div className="settings-kv">
+                    <span className="settings-kv-label">最新版本</span>
+                    <span className={`settings-kv-value${info?.updateAvailable ? ' warn' : info?.latestVersion ? ' ok' : ''}`}>
+                      {info?.latestVersion || '未检查'}
+                      {info?.updateAvailable ? ' · 可更新' : info?.latestVersion ? ' · 已是最新' : ''}
+                    </span>
+                  </div>
+                  <div className="settings-kv">
+                    <span className="settings-kv-label">Node</span>
+                    <span className="settings-kv-value">{info?.nodeVersion || '不可用'}</span>
+                  </div>
+                  <div className="settings-kv">
+                    <span className="settings-kv-label">平台</span>
+                    <span className="settings-kv-value">{info?.platform || '未知'}</span>
+                  </div>
+                </div>
+
+                {info?.command ? <div className="settings-runtime-path" title={info.command}>{info.command}</div> : null}
+                {info?.error ? <div className="settings-runtime-warning">{info.error}</div> : null}
+                {snapshot.piUpdateMessage ? <div className="settings-runtime-warning">{snapshot.piUpdateMessage}</div> : null}
+                <p className="settings-help">更新会停止当前 Pi 会话。系统安装走 npm 全局更新；内置版本会替换 binaries 中的 pi-package。</p>
+              </div>
+
+              <div className="pane-section">
+                <div className="pane-section-head">
+                  <div>
+                    <div className="pane-section-title">桌面端</div>
+                    <p className="pane-section-note">仅在桌面应用中可用。</p>
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-label">开机自动启动</span>
+                  <Toggle enabled={snapshot.autostartEnabled} label="开机自动启动" disabled={!window.tauDesktop.isTauri} onChange={(enabled) => void controller.setAutostart(enabled)} />
+                </div>
+                <div className="settings-row">
+                  <span className="settings-label">连接方式</span>
+                  <button className="settings-value-btn" type="button" disabled>
+                    {!window.tauDesktop.isTauri ? 'Web 模式' : window.tauDesktop.transport === 'mirror' ? String(snapshot.settings?.tauPort || 3001) : '原生 RPC'}
                   </button>
-                );
-              })}
-            </div>
-            <div className="trust-row">
-              <div className="trust-copy">
-                <strong>项目可信任</strong>
-                <span title={snapshot.workspace.path || undefined}>
-                  {snapshot.workspace.noFolder || !snapshot.workspace.path
-                    ? '无文件夹会话不加载项目级 .pi 资源。'
-                    : '可信任后，Pi 可加载此项目中的 .pi 设置、扩展与技能。'}
-                </span>
+                </div>
+                {snapshot.authConfigured ? (
+                  <div className="settings-row">
+                    <span className="settings-label">需要登录</span>
+                    <Toggle enabled={snapshot.authEnabled} label="需要登录" onChange={(enabled) => void controller.setAuth(enabled)} />
+                  </div>
+                ) : null}
               </div>
-              {snapshot.workspace.noFolder || !snapshot.workspace.path ? null : (() => {
-                const trusted = (snapshot.settings?.trustedProjectPaths || []).includes(snapshot.workspace.path);
-                return <button className={`settings-action-btn${trusted ? ' danger' : ' primary'}`} type="button" onClick={() => void controller.setProjectTrusted(snapshot.workspace.path, !trusted)}>
-                  {trusted ? '撤销可信任' : '信任此项目'}
-                </button>;
-              })()}
-            </div>
-            {!snapshot.workspace.noFolder && snapshot.workspace.path ? <p className="settings-help">项目可信任变更会在下次启动该项目的 Pi 会话时生效。</p> : null}
-          </div>
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-group-label">模型</div>
-          <ModelsProvidersSection snapshot={snapshot} />
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-group-label">运行时</div>
-          <div className="settings-section settings-section-wide">
-            <div className="settings-section-title-row">
-              <div>
-                <div className="settings-section-title">Pi 运行时</div>
-                <p className="settings-help settings-help-inline">检测版本、更新系统安装或内置 sidecar</p>
-              </div>
-              <div className="settings-section-actions">
-                <button className="settings-action-btn" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating} onClick={() => void controller.checkPiUpdate()}>
-                  检查更新
-                </button>
-                <button className="settings-action-btn primary" type="button" disabled={!window.tauDesktop.isTauri || snapshot.piUpdating || !canUpdate} onClick={() => void controller.updatePiRuntime()}>
-                  {snapshot.piUpdating ? '正在更新…' : '更新 Pi'}
-                </button>
-              </div>
-            </div>
-
-            <div className="settings-kv-grid">
-              <div className="settings-kv">
-                <span className="settings-kv-label">来源</span>
-                <span className={`settings-kv-value${info?.bundled || ['system', 'override'].includes(info?.source || '') ? ' ok' : ' warn'}`}>{runtimeSource(snapshot)}</span>
-              </div>
-              <div className="settings-kv">
-                <span className="settings-kv-label">当前版本</span>
-                <span className="settings-kv-value">{info?.piVersion || '不可用'}</span>
-              </div>
-              <div className="settings-kv">
-                <span className="settings-kv-label">最新版本</span>
-                <span className={`settings-kv-value${info?.updateAvailable ? ' warn' : info?.latestVersion ? ' ok' : ''}`}>
-                  {info?.latestVersion || '未检查'}
-                  {info?.updateAvailable ? ' · 可更新' : info?.latestVersion ? ' · 已是最新' : ''}
-                </span>
-              </div>
-              <div className="settings-kv">
-                <span className="settings-kv-label">Node</span>
-                <span className="settings-kv-value">{info?.nodeVersion || '不可用'}</span>
-              </div>
-              <div className="settings-kv">
-                <span className="settings-kv-label">平台</span>
-                <span className="settings-kv-value">{info?.platform || '未知'}</span>
-              </div>
-            </div>
-
-            {info?.command ? <div className="settings-runtime-path" title={info.command}>{info.command}</div> : null}
-            {info?.error ? <div className="settings-runtime-warning">{info.error}</div> : null}
-            {snapshot.piUpdateMessage ? <div className="settings-runtime-warning">{snapshot.piUpdateMessage}</div> : null}
-            <p className="settings-help">更新会停止当前 Pi 会话。系统安装走 npm 全局更新；内置版本会替换 binaries 中的 pi-package。</p>
-          </div>
+            </>
+          ) : null}
         </div>
       </div>
     </section>
@@ -553,9 +607,9 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
 
   if (!desktop) {
     return (
-      <div className="settings-section settings-section-wide">
-        <div className="settings-section-title">模型提供商</div>
-        <p className="settings-help">模型配置（~/.pi/agent/models.json）仅在桌面应用中可管理。</p>
+      <div className="pane-section">
+        <div className="pane-section-title">模型供应商</div>
+        <p className="pane-section-note">模型配置（~/.pi/agent/models.json）仅在桌面应用中可管理。</p>
       </div>
     );
   }
@@ -615,17 +669,16 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
   };
 
   return (
-    <div className="settings-section settings-section-wide models-section">
-      <div className="settings-section-title-row">
-        <div className="models-section-heading">
-          <span className="models-section-eyebrow">MODEL CONFIGURATION</span>
-          <div className="settings-section-title">模型供应商</div>
-          <p className="settings-help settings-help-inline">
+    <div className="pane-section flush models-section">
+      <div className="pane-section-head">
+        <div>
+          <div className="pane-section-title">模型供应商{dirty ? <span className="pane-dirty-dot" title="有未保存更改" /> : null}</div>
+          <p className="pane-section-note">
             管理 API 连接、兼容性和模型能力。保存后自动刷新可用模型
             {dirty ? ' · 有未保存更改' : ''}
           </p>
         </div>
-        <div className="settings-section-actions">
+        <div className="pane-section-actions">
           <button
             className="settings-action-btn"
             type="button"
@@ -1104,22 +1157,21 @@ function shortenPath(path?: string): string {
 
 function ExtensionRow({ item, installing }: { item: PiExtensionInfo; installing: boolean }) {
   return (
-    <div className={`extension-row${item.installed ? ' installed' : ''}`}>
-      <div className="extension-main">
-        <div className="extension-title-row">
-          <div className="extension-name">{item.name}</div>
-          {item.installed ? <span className="extension-tag ok">已安装</span> : null}
-          {item.requiresDependencies ? <span className="extension-tag">需要 npm 依赖</span> : null}
+    <div className={`catalog-row${item.installed ? ' installed' : ''}`}>
+      <div className="catalog-main">
+        <div className="catalog-title-row">
+          <div className="catalog-name">{item.name}</div>
+          {item.installed ? <span className="catalog-tag ok">已安装</span> : null}
+          {item.requiresDependencies ? <span className="catalog-tag">需要 npm 依赖</span> : null}
         </div>
-        <div className="extension-description">{item.description || 'Pi 扩展'}</div>
-        <div className="extension-meta">
-          <span className="extension-meta-item">{item.category}</span>
-          <span className="extension-meta-item">{item.kind === 'directory' ? '文件夹' : '文件'}</span>
-          <span className="extension-meta-item">{item.source}</span>
-          {item.installedPath ? <span className="extension-meta-item" title={item.installedPath}>{shortenPath(item.installedPath)}</span> : null}
+        <div className="catalog-description">{item.description || 'Pi 扩展'}</div>
+        <div className="catalog-meta">
+          <span className="catalog-meta-item">{item.category}</span>
+          <span className="catalog-meta-item">{item.source}</span>
+          {item.installedPath ? <span className="catalog-meta-item" title={item.installedPath}>{shortenPath(item.installedPath)}</span> : null}
         </div>
       </div>
-      <button className="extension-install" type="button" disabled={item.installed || installing} onClick={() => void controller.installExtension(item.id)}>
+      <button className={`catalog-action${item.installed ? ' done' : ''}`} type="button" disabled={item.installed || installing} onClick={() => void controller.installExtension(item.id)}>
         {item.installed ? <><Icon name="check" width={14} height={14} /><span>已安装</span></> : installing ? <span>正在安装…</span> : <><Icon name="download" width={14} height={14} /><span>安装</span></>}
       </button>
     </div>
@@ -1139,78 +1191,495 @@ export function ExtensionsView({ snapshot }: { snapshot: AppSnapshot }) {
   const status = snapshot.extensionError || (snapshot.extensionsLoading ? '正在加载扩展…' : extensions.length ? `显示 ${filtered.length} / ${extensions.length} 个扩展 · 安装目录：${snapshot.extensions?.installDir || ''}` : '未找到 Pi 扩展目录，请重新运行 vendor 脚本或在本机安装 Pi。');
 
   return (
-      <div className="extensions-body">
-        <div className="extensions-toolbar">
-          <label className="extensions-search-wrap"><Icon name="search" width={14} height={14} /><input type="search" className="extensions-search" placeholder="搜索扩展" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          <button className="extensions-refresh" type="button" title="刷新扩展" aria-label="刷新扩展" onClick={() => void controller.loadExtensions(true)}><Icon name="refresh" width={14} height={14} /></button>
+      <div className="pane-section flush">
+        <div className="catalog-toolbar">
+          <label className="catalog-search-wrap"><Icon name="search" width={14} height={14} /><input type="search" className="catalog-search" placeholder="搜索扩展" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          <button className="catalog-icon-btn" type="button" title="刷新扩展" aria-label="刷新扩展" onClick={() => void controller.loadExtensions(true)}><Icon name="refresh" width={14} height={14} /></button>
         </div>
-        <div className="extensions-categories">
-          {categories.map((value) => <button className={`extensions-category${category === value ? ' active' : ''}`} type="button" key={value} onClick={() => setCategory(value)}>{({ All: '全部', Installed: '已安装' } as Record<string, string>)[value] || value}</button>)}
+        <div className="catalog-filters">
+          {categories.map((value) => <button className={`catalog-filter${category === value ? ' active' : ''}`} type="button" key={value} onClick={() => setCategory(value)}>{({ All: '全部', Installed: '已安装' } as Record<string, string>)[value] || value}</button>)}
         </div>
-        <div className={`extensions-status${snapshot.extensionError ? ' error' : ''}`}>{status}</div>
-        <div className="extensions-list">
+        <div className={`catalog-status${snapshot.extensionError ? ' error' : ''}`}>{status}</div>
+        <div className="catalog-list">
           {filtered.map((item) => <ExtensionRow item={item} installing={snapshot.extensionInstallingId === item.id} key={item.id} />)}
-          {!snapshot.extensionsLoading && filtered.length === 0 ? <div className="extensions-empty">没有符合当前筛选条件的扩展。</div> : null}
+          {!snapshot.extensionsLoading && filtered.length === 0 ? <div className="catalog-empty">没有符合当前筛选条件的扩展。</div> : null}
         </div>
       </div>
   );
+}
+
+/** `npm:foo@1.2.0` / `foo@1.2.0` / `@scope/foo` all collapse to the bare name. */
+function packageKey(value: string): string {
+  const bare = value.trim().replace(/^npm:/i, '');
+  const version = bare.lastIndexOf('@');
+  return (version > 0 ? bare.slice(0, version) : bare).toLowerCase();
+}
+
+interface PackageEntry {
+  key: string;
+  name: string;
+  source: string;
+  description?: string;
+  packageType?: string;
+  downloads?: string;
+  version?: string;
+  installed: boolean;
+  enabled: boolean;
 }
 
 export function PackagesView({ snapshot }: { snapshot: AppSnapshot }) {
   const [packageSource, setPackageSource] = useState('');
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('All');
+  const [pendingSource, setPendingSource] = useState('');
+
+  const installed = useMemo(() => snapshot.packages?.packages || [], [snapshot.packages]);
+  const results = snapshot.packageSearchResults;
+
+  // One list: every catalog hit annotated with its real install state, plus any
+  // installed package the catalog doesn't know about (git / local sources).
+  const entries = useMemo<PackageEntry[]>(() => {
+    const installedByKey = new Map<string, PiPackageInfo>();
+    for (const item of installed) {
+      installedByKey.set(packageKey(item.source), item);
+      if (item.name) installedByKey.set(packageKey(item.name), item);
+    }
+    const catalogKeys = new Set<string>();
+    const fromCatalog = results.map((item) => {
+      const key = packageKey(item.name);
+      catalogKeys.add(key);
+      const match = installedByKey.get(key);
+      return {
+        key,
+        name: item.name,
+        source: match?.source || `npm:${item.name}`,
+        description: item.description || match?.description,
+        packageType: item.packageType,
+        downloads: item.downloads,
+        version: match?.version,
+        installed: Boolean(match),
+        enabled: match ? match.enabled : true,
+      };
+    });
+    const extras = installed
+      .filter((item) => !catalogKeys.has(packageKey(item.source)) && !(item.name && catalogKeys.has(packageKey(item.name))))
+      .map((item) => ({
+        key: packageKey(item.source),
+        name: item.name || item.source,
+        source: item.source,
+        description: item.description,
+        version: item.version,
+        installed: true,
+        enabled: item.enabled,
+      }));
+    return [...extras, ...fromCatalog];
+  }, [installed, results]);
+
+  const types = ['All', 'Installed', ...new Set(entries.map((item) => item.packageType).filter((value): value is string => Boolean(value)))];
+  const visible = entries.filter((item) => filter === 'All' || (filter === 'Installed' ? item.installed : item.packageType === filter));
+  const installedCount = entries.filter((item) => item.installed).length;
+
+  const status = snapshot.packageSearchError
+    || snapshot.packageError
+    || (snapshot.packageSearchLoading || snapshot.packagesLoading ? '正在读取软件包…' : `显示 ${visible.length} / ${entries.length} 个软件包 · 已安装 ${installedCount} 个`);
+
+  const install = (source: string) => {
+    setPendingSource(source);
+    void controller.installPackage(source).finally(() => setPendingSource(''));
+  };
+
   return (
-      <div className="extensions-body">
-        <section className="packages-section">
-          <div className="packages-section-header"><div><h4>Pi 软件包目录</h4><p>搜索官方目录并一键拉取；也可输入 npm、Git 或本地路径。</p></div><button className="extensions-refresh" type="button" title="刷新已安装软件包" aria-label="刷新已安装软件包" onClick={() => void controller.loadPackages(true)}><Icon name="refresh" width={14} height={14} /></button></div>
-          <form className="package-search-form" onSubmit={(event) => { event.preventDefault(); void controller.searchPackages(query); }}><label className="extensions-search-wrap"><Icon name="search" width={14} height={14} /><input type="search" className="extensions-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索官方 Pi 软件包" /></label><button className="settings-action-btn" type="submit" disabled={snapshot.packageSearchLoading}>{snapshot.packageSearchLoading ? '搜索中…' : '搜索'}</button></form>
-          {snapshot.packageSearchError ? <div className="packages-status error">{snapshot.packageSearchError}</div> : null}
-          {snapshot.packageSearchResults.length ? <><div className="package-results-heading"><strong>搜索结果</strong><span>{snapshot.packageSearchResults.length} 个软件包</span></div><div className="packages-list package-catalog-list">{snapshot.packageSearchResults.map((item) => <article className="package-row package-catalog-card" key={item.name}><div className="package-main"><div className="package-name-line"><code>{item.name}</code><span>{item.packageType || 'package'}{item.downloads ? ` · ${item.downloads}` : ''}</span></div><p>{item.description || '该软件包没有提供简介。'}</p></div><button className="settings-action-btn primary" type="button" disabled={snapshot.packageInstalling} onClick={() => void controller.installPackage(`npm:${item.name}`)}>{snapshot.packageInstalling ? '拉取中' : '拉取'}</button></article>)}</div></> : null}
-          <div className="package-manual-heading"><strong>手动添加</strong><span>npm、Git 或本地路径</span></div>
-          <form className="package-install-form" onSubmit={(event) => { event.preventDefault(); const source = packageSource.trim(); if (!source) return; void controller.installPackage(source); }}>
-            <input className="settings-text-input" value={packageSource} onChange={(event) => setPackageSource(event.target.value)} placeholder="npm:包名、git:github.com/用户/仓库或本地路径" aria-label="Pi 软件包来源" />
-            <button className="settings-action-btn primary" type="submit" disabled={!packageSource.trim() || snapshot.packageInstalling}>{snapshot.packageInstalling ? '正在安装…' : '安装软件包'}</button>
+    <>
+      <section className="pane-section flush">
+        <div className="catalog-toolbar">
+          <form className="catalog-search-wrap" onSubmit={(event) => { event.preventDefault(); void controller.searchPackages(query); }}>
+            <Icon name="search" width={14} height={14} />
+            <input type="search" className="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索官方 Pi 软件包，回车确认" aria-label="搜索 Pi 软件包" />
           </form>
-          <p className="packages-security-note">第三方软件包可执行扩展代码。请仅安装你信任的来源。</p>
-          {snapshot.packageError ? <div className="packages-status error">{snapshot.packageError}</div> : null}
-          <h4 className="packages-installed-title">已安装的软件包</h4>{snapshot.packagesLoading ? <div className="packages-status">正在读取已安装软件包…</div> : null}
-          {!snapshot.packagesLoading && !snapshot.packageError && snapshot.packages ? (snapshot.packages.packages.length ? <div className="packages-list">{snapshot.packages.packages.map((item) => <PackageRow item={item} removing={snapshot.packageRemovingSource === item.source} key={item.source} />)}</div> : <div className="packages-status">尚未安装全局 Pi 软件包。</div>) : null}
-        </section>
+          <button className="catalog-icon-btn" type="button" title="刷新软件包" aria-label="刷新软件包" disabled={snapshot.packagesLoading || snapshot.packageSearchLoading} onClick={() => { void controller.loadPackages(true); void controller.searchPackages(query); }}>
+            <Icon name="refresh" width={14} height={14} />
+          </button>
+        </div>
+        <div className="catalog-filters">
+          {types.map((value) => (
+            <button className={`catalog-filter${filter === value ? ' active' : ''}`} type="button" key={value} onClick={() => setFilter(value)}>
+              {({ All: '全部', Installed: `已安装${installedCount ? ` ${installedCount}` : ''}` } as Record<string, string>)[value] || value}
+            </button>
+          ))}
+        </div>
+        <div className={`catalog-status${snapshot.packageSearchError || snapshot.packageError ? ' error' : ''}`}>{status}</div>
+        <div className="catalog-list">
+          {visible.map((item) => (
+            <PackageRow
+              item={item}
+              key={item.key || item.source}
+              installing={snapshot.packageInstalling && pendingSource === item.source}
+              busy={snapshot.packageInstalling}
+              removing={snapshot.packageRemovingSource === item.source}
+              onInstall={() => install(item.source)}
+            />
+          ))}
+          {!snapshot.packagesLoading && !snapshot.packageSearchLoading && visible.length === 0 ? (
+            <div className="catalog-empty">{filter === 'Installed' ? '尚未安装全局 Pi 软件包。' : '没有符合当前筛选条件的软件包。'}</div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="pane-section">
+        <div className="pane-section-head">
+          <div>
+            <div className="pane-section-title">手动添加</div>
+            <p className="pane-section-note">目录里没有的来源：npm 包名、Git 仓库或本地路径。</p>
+          </div>
+        </div>
+        <form className="package-install-form" onSubmit={(event) => { event.preventDefault(); const source = packageSource.trim(); if (!source) return; install(source); setPackageSource(''); }}>
+          <input className="settings-text-input" value={packageSource} onChange={(event) => setPackageSource(event.target.value)} placeholder="npm:包名、git:github.com/用户/仓库或本地路径" aria-label="Pi 软件包来源" />
+          <button className="settings-action-btn primary" type="submit" disabled={!packageSource.trim() || snapshot.packageInstalling}>{snapshot.packageInstalling ? '正在安装…' : '安装软件包'}</button>
+        </form>
+        <p className="packages-security-note">第三方软件包可执行扩展代码。请仅安装你信任的来源。</p>
+      </section>
+    </>
+  );
+}
+
+const emptyPromptDraft = { scope: 'user' as 'user' | 'project', name: '', description: '', argumentHint: '', body: '', originalPath: '' };
+
+function scopeLabel(scope: string): string {
+  return ({ user: '全局', project: '项目', package: '软件包' } as Record<string, string>)[scope] || scope;
+}
+
+function PromptRow({
+  template,
+  busy,
+  onEdit,
+  onDelete,
+}: {
+  template: PiPromptTemplate;
+  busy: boolean;
+  onEdit(): void;
+  onDelete(): void;
+}) {
+  return (
+    <div className="catalog-row">
+      <div className="catalog-main">
+        <div className="catalog-title-row">
+          <div className="catalog-name mono">/{template.name}</div>
+          {template.argumentHint ? <span className="prompt-hint mono">{template.argumentHint}</span> : null}
+          <span className={`catalog-tag${template.editable ? '' : ' warn'}`}>{scopeLabel(template.scope)}</span>
+        </div>
+        <div className="catalog-description">{template.description || '该模板没有提供描述。'}</div>
+        <div className="catalog-meta">
+          <span className="catalog-meta-item" title={template.filePath}>{template.filePath}</span>
+          {template.scope === 'package' ? <span className="catalog-meta-item">{template.origin}</span> : null}
+        </div>
       </div>
+      <div className="catalog-actions">
+        <button className="catalog-action" type="button" onClick={onEdit}>{template.editable ? '编辑' : '查看'}</button>
+        {template.editable ? (
+          <button
+            className="catalog-action danger"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(`删除提示模板“/${template.name}”？\n${template.filePath}`)) onDelete();
+            }}
+          >删除</button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PromptsView({ snapshot }: { snapshot: AppSnapshot }) {
+  const [draft, setDraft] = useState<typeof emptyPromptDraft | null>(null);
+  const [readOnlyPath, setReadOnlyPath] = useState('');
+  const [query, setQuery] = useState('');
+  const templates = snapshot.prompts?.templates || [];
+  const projectDir = snapshot.prompts?.projectDir;
+  const visible = templates.filter((template) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || `${template.name} ${template.description}`.toLowerCase().includes(needle);
+  });
+  // Break the count down so package-provided templates do not look like a bug.
+  const ownCount = templates.filter((template) => template.editable).length;
+  const packageOrigins = new Set(templates.filter((template) => template.scope === 'package').map((template) => template.origin));
+  const promptSummary = [
+    `${ownCount} 个自建`,
+    packageOrigins.size ? `${templates.length - ownCount} 个来自软件包（${[...packageOrigins].join('、')}）` : '',
+    '输入 /名称 即可调用',
+  ].filter(Boolean).join(' · ');
+
+  const openEditor = (template?: PiPromptTemplate) => {
+    setReadOnlyPath(template && !template.editable ? template.filePath : '');
+    setDraft(
+      template
+        ? {
+            scope: template.scope === 'project' ? 'project' : 'user',
+            name: template.name,
+            description: template.description,
+            argumentHint: template.argumentHint || '',
+            body: template.body,
+            originalPath: template.editable ? template.filePath : '',
+          }
+        : { ...emptyPromptDraft },
+    );
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    const saved = await controller.savePrompt({
+      scope: draft.scope,
+      name: draft.name,
+      description: draft.description,
+      argumentHint: draft.argumentHint,
+      body: draft.body,
+      originalPath: draft.originalPath,
+    });
+    if (saved) setDraft(null);
+  };
+
+  if (draft) {
+    const readOnly = Boolean(readOnlyPath);
+    return (
+      <section className="pane-section">
+        <div className="pane-section-head">
+          <div>
+            <div className="pane-section-title">{readOnly ? `查看 /${draft.name}` : draft.originalPath ? `编辑 /${draft.name}` : '新建提示模板'}</div>
+            <p className="pane-section-note">
+              {readOnly
+                ? `该模板来自${scopeLabel(templates.find((item) => item.filePath === readOnlyPath)?.scope || 'package')}，只能查看。`
+                : '文件名即命令名。正文支持 $1、$@/$ARGUMENTS、${1:-默认值} 与 ${@:2} 等参数占位符。'}
+            </p>
+          </div>
+          <button className="settings-action-btn" type="button" onClick={() => setDraft(null)}>返回列表</button>
+        </div>
+        <div className="prompt-editor">
+          <label className="prompt-field">
+            <span>命令名</span>
+            <input
+              className="settings-text-input mono"
+              value={draft.name}
+              disabled={readOnly}
+              placeholder="review"
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            />
+            <small>调用方式：/{draft.name.trim().replace(/^\//, '') || 'name'}</small>
+          </label>
+          <label className="prompt-field">
+            <span>保存位置</span>
+            <select
+              className="settings-text-input"
+              value={draft.scope}
+              disabled={readOnly}
+              onChange={(event) => setDraft({ ...draft, scope: event.target.value as 'user' | 'project' })}
+            >
+              <option value="user">全局 · {snapshot.prompts?.userDir || '~/.pi/agent/prompts'}</option>
+              <option value="project" disabled={!projectDir || !snapshot.prompts?.projectTrusted}>
+                项目 · {projectDir ? (snapshot.prompts?.projectTrusted ? projectDir : `${projectDir}（项目尚未信任）`) : '需要先打开一个项目'}
+              </option>
+            </select>
+          </label>
+          <label className="prompt-field">
+            <span>描述</span>
+            <input
+              className="settings-text-input"
+              value={draft.description}
+              disabled={readOnly}
+              placeholder="留空时 Pi 会取正文第一行"
+              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+            />
+          </label>
+          <label className="prompt-field">
+            <span>参数提示</span>
+            <input
+              className="settings-text-input mono"
+              value={draft.argumentHint}
+              disabled={readOnly}
+              placeholder="<必填参数> [可选参数]"
+              onChange={(event) => setDraft({ ...draft, argumentHint: event.target.value })}
+            />
+            <small>显示在斜杠命令补全里，尖括号表示必填、方括号表示可选。</small>
+          </label>
+          <label className="prompt-field wide">
+            <span>正文</span>
+            <textarea
+              className="settings-text-input prompt-body mono"
+              value={draft.body}
+              disabled={readOnly}
+              rows={14}
+              placeholder={'审查已暂存的改动（`git diff --cached`），重点关注：\n- 逻辑错误\n- 安全问题'}
+              onChange={(event) => setDraft({ ...draft, body: event.target.value })}
+            />
+          </label>
+        </div>
+        {snapshot.promptError ? <div className="catalog-status error">{snapshot.promptError}</div> : null}
+        {!readOnly ? (
+          <div className="prompt-editor-actions">
+            <button
+              className="settings-action-btn primary"
+              type="button"
+              disabled={!draft.name.trim() || !draft.body.trim() || snapshot.promptSaving}
+              onClick={() => void save()}
+            >{snapshot.promptSaving ? '正在保存…' : '保存模板'}</button>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="pane-section flush">
+        <div className="catalog-toolbar">
+          <div className="catalog-search-wrap">
+            <Icon name="search" width={14} height={14} />
+            <input type="search" className="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索提示模板" aria-label="搜索提示模板" />
+          </div>
+          <button className="catalog-icon-btn" type="button" title="刷新模板" aria-label="刷新模板" disabled={snapshot.promptsLoading} onClick={() => void controller.loadPrompts(true)}>
+            <Icon name="refresh" width={14} height={14} />
+          </button>
+          <button className="catalog-action primary" type="button" onClick={() => openEditor()}>新建模板</button>
+        </div>
+        <div className={`catalog-status${snapshot.promptError ? ' error' : ''}`}>
+          {snapshot.promptError || (snapshot.promptsLoading ? '正在加载提示模板…' : promptSummary)}
+        </div>
+        <div className="catalog-list">
+          {visible.map((template) => (
+            <PromptRow
+              key={template.filePath}
+              template={template}
+              busy={snapshot.promptSaving}
+              onEdit={() => openEditor(template)}
+              onDelete={() => void controller.deletePrompt(template.filePath)}
+            />
+          ))}
+          {!snapshot.promptsLoading && visible.length === 0 ? (
+            <div className="catalog-empty">{query.trim() ? '没有匹配的提示模板。' : '还没有提示模板。新建一个，之后在输入框里用 /名称 调用。'}</div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="pane-section">
+        <div className="pane-section-head">
+          <div>
+            <div className="pane-section-title">Pi 从哪里加载模板</div>
+            <p className="pane-section-note">目录扫描不递归，只读取 <code>.md</code> 文件。</p>
+          </div>
+        </div>
+        <ul className="prompt-locations">
+          <li><span>全局</span><code>{snapshot.prompts?.userDir || '~/.pi/agent/prompts'}</code></li>
+          <li>
+            <span>项目</span>
+            <code>{projectDir || '<项目>/.pi/prompts'}{snapshot.prompts && !snapshot.prompts.projectTrusted ? '（项目尚未信任，Pi 不会加载）' : ''}</code>
+          </li>
+          <li><span>软件包</span><code>settings.json 里 packages 声明的包：pi.prompts 或 prompts/ 目录</code></li>
+        </ul>
+        <p className="pane-section-note">
+          settings.json 的 <code>prompts</code> 数组不是额外来源，而是对上面前两项的启用/禁用过滤器（只有 <code>!</code>、<code>+</code>、<code>-</code> 前缀的条目生效）。
+        </p>
+      </section>
+    </>
   );
 }
 
 export function CustomizationView({ snapshot }: { snapshot: AppSnapshot }) {
-  const [tab, setTab] = useState<'extensions' | 'packages'>('extensions');
-  const content = tab === 'extensions' ? <ExtensionsView snapshot={snapshot} /> : <PackagesView snapshot={snapshot} />;
+  const [tab, setTab] = useState<'extensions' | 'packages' | 'prompts'>('extensions');
+  const extensionCount = snapshot.extensions?.extensions.length || 0;
+  const packageCount = snapshot.packages?.packages.length || 0;
+  const promptCount = snapshot.prompts?.templates.length || 0;
+  const tabs = [
+    { id: 'extensions' as const, label: '扩展', count: extensionCount, subtitle: '为 Pi 添加独立扩展，安装后在下次会话生效。' },
+    { id: 'packages' as const, label: '软件包', count: packageCount, subtitle: '安装包含扩展、技能、提示模板和主题的软件包。' },
+    { id: 'prompts' as const, label: '提示模板', count: promptCount, subtitle: '把常用提示存成 Markdown 模板，在输入框里用 /名称 调用。' },
+  ];
+  const current = tabs.find((item) => item.id === tab) || tabs[0];
   return (
     <section className="extensions-panel workspace-view" aria-label="定制">
-      <div className="settings-header extensions-header">
-        <div className="settings-header-copy">
-          <span className="eyebrow">能力中心</span>
-          <div className="settings-title-row"><h3>定制</h3><button className="settings-close" type="button" aria-label="关闭定制" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button></div>
-          <p className="settings-subtitle">为 Pi 添加独立扩展，或安装包含扩展、技能、提示模板和主题的软件包。</p>
+      <div className="pane-layout">
+        <nav className="pane-nav" aria-label="定制内容">
+          <div className="pane-nav-title">定制</div>
+          {tabs.map((item) => (
+            <button
+              className={`pane-nav-item${tab === item.id ? ' active' : ''}`}
+              type="button"
+              key={item.id}
+              aria-current={tab === item.id ? 'page' : undefined}
+              onClick={() => setTab(item.id)}
+            >
+              <span>{item.label}</span>
+              {item.count ? <span className="pane-nav-count">{item.count}</span> : null}
+            </button>
+          ))}
+        </nav>
+
+        <div className="pane-content">
+          <div className="pane-header">
+            <div className="pane-header-copy">
+              <h2>{current.label}</h2>
+              <p className="pane-header-subtitle">{current.subtitle}</p>
+            </div>
+            <div className="pane-header-actions">
+              <button className="pane-close" type="button" aria-label="关闭定制" title="关闭定制" onClick={() => controller.returnToChat()}><Icon name="close" width={16} height={16} /></button>
+            </div>
+          </div>
+          {tab === 'extensions' ? <ExtensionsView snapshot={snapshot} /> : null}
+          {tab === 'packages' ? <PackagesView snapshot={snapshot} /> : null}
+          {tab === 'prompts' ? <PromptsView snapshot={snapshot} /> : null}
         </div>
       </div>
-      <nav className="customization-tabs" aria-label="定制内容">
-        <button type="button" className={tab === 'extensions' ? 'active' : ''} aria-current={tab === 'extensions' ? 'page' : undefined} onClick={() => setTab('extensions')}>扩展</button>
-        <span aria-hidden="true">/</span>
-        <button type="button" className={tab === 'packages' ? 'active' : ''} aria-current={tab === 'packages' ? 'page' : undefined} onClick={() => setTab('packages')}>软件包</button>
-      </nav>
-      {content}
     </section>
   );
 }
 
-function PackageRow({ item, removing }: { item: PiPackageInfo; removing: boolean }) {
-  const installationStatus = `${item.installed ? `已安装${item.version ? ` · v${item.version}` : ''}` : '未检测到本地安装'} · ${item.enabled ? '已启用' : '已禁用'}`;
-  return <div className="package-row">
-    <div className="package-main">
-      <div className="package-name-line"><code title={item.source}>{item.name || item.source}</code><span>{installationStatus}</span></div>
-      {item.description ? <p>{item.description}</p> : null}
+function PackageRow({
+  item,
+  installing,
+  busy,
+  removing,
+  onInstall,
+}: {
+  item: PackageEntry;
+  installing: boolean;
+  busy: boolean;
+  removing: boolean;
+  onInstall(): void;
+}) {
+  const meta = [
+    item.packageType,
+    item.downloads ? `${item.downloads} 次下载` : '',
+    item.installed ? item.source : '',
+  ].filter(Boolean);
+  return (
+    <div className={`catalog-row${item.installed ? ' installed' : ''}`}>
+      <div className="catalog-main">
+        <div className="catalog-title-row">
+          <div className="catalog-name mono" title={item.source}>{item.name}</div>
+          {item.installed ? <span className="catalog-tag ok">已安装{item.version ? ` v${item.version}` : ''}</span> : null}
+          {item.installed && !item.enabled ? <span className="catalog-tag warn">已禁用</span> : null}
+        </div>
+        <div className="catalog-description">{item.description || '该软件包没有提供简介。'}</div>
+        {meta.length ? (
+          <div className="catalog-meta">
+            {meta.map((value) => <span className="catalog-meta-item" key={value}>{value}</span>)}
+          </div>
+        ) : null}
+      </div>
+      {item.installed ? (
+        <button
+          className="catalog-action danger"
+          type="button"
+          disabled={removing}
+          onClick={() => {
+            if (window.confirm(`移除 Pi 软件包“${item.source}”？`)) void controller.removePackage(item.source);
+          }}
+        >
+          {removing ? '正在移除…' : '移除'}
+        </button>
+      ) : (
+        <button className="catalog-action" type="button" disabled={busy} onClick={onInstall}>
+          {installing ? <span>正在安装…</span> : <><Icon name="download" width={14} height={14} /><span>安装</span></>}
+        </button>
+      )}
     </div>
-    <button className="settings-action-btn danger" type="button" disabled={removing} onClick={() => {
-      if (window.confirm(`移除 Pi 软件包“${item.source}”？`)) void controller.removePackage(item.source);
-    }}>{removing ? '正在移除…' : '移除'}</button>
-  </div>;
+  );
 }

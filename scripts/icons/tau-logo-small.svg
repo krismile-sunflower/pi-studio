@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">PiCode application icon, small sizes</title>
+  <desc id="desc">Simplified pi mark on a violet tile for 16 and 32 pixel rendering.</desc>
+  <defs>
+    <linearGradient id="tile" x1="40" y1="0" x2="472" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B96FF"/>
+      <stop offset="1" stop-color="#5A63D8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <!-- At 16px the prompt rule lands under one device pixel and only muddies the
+       glyph, so it is dropped and the pi is enlarged to carry the icon alone. -->
+  <!-- Glyph geometry is shared with tau-logo.svg — change it there first,
+       then mirror the rects here. -->
+  <g fill="#FFFFFF">
+    <rect x="104" y="136" width="304" height="64" rx="32"/>
+    <rect x="150" y="186" width="64" height="190" rx="32"/>
+    <rect x="298" y="186" width="64" height="190" rx="32"/>
+  </g>
+</svg>

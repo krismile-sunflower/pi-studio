@@ -219,4 +219,75 @@ describe('MessageList', () => {
     expect(screen.getByRole('button', { name: '编辑计划' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /开始执行/ })).toBeDisabled();
   });
+
+  it('renders a subagent delegation as a child-progress card', () => {
+    const timeline: TimelineItem[] = [
+      {
+        id: 'tool-sub',
+        kind: 'tool',
+        tool: {
+          toolCallId: 'tool-sub',
+          toolName: 'subagent',
+          args: { tasks: [{ agent: 'scout', task: '梳理组件结构' }, { agent: 'critic', task: '评审' }] },
+          status: 'streaming',
+          output: '',
+          resultDetails: {
+            mode: 'parallel',
+            progress: [
+              {
+                index: 0,
+                agent: 'scout',
+                status: 'running',
+                task: '梳理组件结构',
+                currentTool: 'read',
+                currentToolArgs: 'src/app/App.tsx',
+                recentTools: [],
+                recentOutput: [],
+                toolCount: 4,
+                tokens: 8400,
+                durationMs: 12_000,
+              },
+              { index: 1, agent: 'critic', status: 'completed', task: '评审', recentTools: [], recentOutput: [], toolCount: 2, tokens: 900, durationMs: 3000 },
+            ],
+            results: [],
+          },
+        },
+      },
+    ];
+
+    render(<MessageList timeline={timeline} streaming />);
+
+    expect(screen.getByText('子代理')).toBeInTheDocument();
+    expect(screen.getByText('并行 · 2 个')).toBeInTheDocument();
+    expect(screen.getByText('scout')).toBeInTheDocument();
+    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByText(/src\/app\/App\.tsx/)).toBeInTheDocument();
+    expect(screen.getByText(/1\/2 完成/)).toBeInTheDocument();
+  });
+
+  it('falls back to the arguments-only skeleton when a session replays without details', () => {
+    render(
+      <MessageList
+        timeline={[{
+          id: 'tool-sub',
+          kind: 'tool',
+          tool: {
+            toolCallId: 'tool-sub',
+            toolName: 'subagent',
+            args: { agent: 'planner', task: '拆解任务' },
+            status: 'complete',
+            output: '完成了拆解',
+            history: true,
+          },
+        }]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByText('单个 · planner')).toBeInTheDocument();
+    expect(screen.getByText('拆解任务')).toBeInTheDocument();
+    // No progress payload survives a session reload, so the child inherits the tool's outcome.
+    expect(screen.getByText('完成了拆解')).toBeInTheDocument();
+    expect(screen.getAllByText('已完成').length).toBeGreaterThan(1);
+  });
 });

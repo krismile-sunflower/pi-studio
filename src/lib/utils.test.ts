@@ -5,6 +5,7 @@ import {
   getMessageText,
   getMessageThinking,
   normalizeMessageText,
+  parseImagePaths,
   samePath,
   normalizeContextUsage,
   totalContextTokens,
@@ -16,6 +17,20 @@ describe('frontend protocol utilities', () => {
     expect(samePath('D:\\work\\pi-studio\\', 'd:/work/pi-studio')).toBe(true);
     expect(samePath('/work/a', '/work/b')).toBe(false);
     expect(basename('D:\\work\\pi-studio')).toBe('pi-studio');
+  });
+
+  it('detects image paths pasted as text instead of binary clipboard data', () => {
+    expect(parseImagePaths('/Users/me/Desktop/截图.png')).toEqual(['/Users/me/Desktop/截图.png']);
+    expect(parseImagePaths('file:///Users/me/a%20b.JPEG')).toEqual(['/Users/me/a b.JPEG']);
+    expect(parseImagePaths('/a/one.png\n/a/two.webp')).toEqual(['/a/one.png', '/a/two.webp']);
+    expect(parseImagePaths('C:\\Users\\me\\shot.gif')).toEqual(['C:\\Users\\me\\shot.gif']);
+  });
+
+  it('leaves ordinary text and non-image paths alone', () => {
+    expect(parseImagePaths('看看 /a/one.png 这个文件')).toEqual([]);
+    expect(parseImagePaths('/a/notes.md')).toEqual([]);
+    expect(parseImagePaths('/a/one.png\n/a/notes.md')).toEqual([]);
+    expect(parseImagePaths('')).toEqual([]);
   });
 
   it('extracts text and thinking blocks from Pi messages', () => {

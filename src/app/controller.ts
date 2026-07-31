@@ -20,6 +20,7 @@ import type {
   PiExtensionsCatalog,
   PiPackagesCatalog,
   PiPackageCatalogItem,
+  PiPromptCatalog,
   PiInstance,
   PiMessage,
   PiRuntimeInfo,
@@ -55,6 +56,7 @@ import {
   uniqueId,
 } from '../lib/utils';
 import { mergeSlashCommands } from '../lib/slash-commands';
+import { subagentDetailsOf } from '../lib/subagents';
 import { isInteractiveExtensionRequest } from '../lib/extension-ui';
 import { appStore } from './store';
 import {
@@ -84,6 +86,12 @@ import type {
   StateResponse,
 } from './controller-contracts';
 import { fetchRunningInstances, notify } from './controller-contracts';
+
+/** Carries a tool result's structured `details` (e.g. pi-subagents child progress) onto the card. */
+function detailsPatch(result: unknown): Pick<ToolExecution, 'resultDetails'> | undefined {
+  const details = subagentDetailsOf(result);
+  return details ? { resultDetails: details } : undefined;
+}
 
 function knownModelValue(value?: string | null): string {
   const normalized = String(value || '').trim();
@@ -182,6 +190,7 @@ export class PiStudioController {
       void this.loadExtensions();
       void this.loadPackages();
       void this.searchPackages();
+      void this.loadPrompts();
     }
     if (view === 'changes') void this.loadGitStatus();
   }
@@ -1329,6 +1338,76 @@ export class PiStudioController {
     }
   }
 
+  /** Project-scoped templates live in `<project>/.pi/prompts`, so Pi needs the workspace root. */
+  private promptProjectPath(): string | undefined {
+    const { path, noFolder } = appStore.getSnapshot().workspace;
+    return !noFolder && path ? path : undefined;
+  }
+
+  async loadPrompts(force = false): Promise<void> {
+    if (!isDesktop) {
+      appStore.update({
+        prompts: { userDir: '', projectDir: null, projectTrusted: false, templates: [] },
+        promptError: '提示模板管理仅在桌面应用中可用。',
+      });
+      return;
+    }
+    if (appStore.getSnapshot().prompts && !force) return;
+    appStore.update({ promptsLoading: true, promptError: '' });
+    try {
+      const prompts = await invoke<PiPromptCatalog>('list_pi_prompts', {
+        request: { projectPath: this.promptProjectPath() },
+      });
+      appStore.update({ prompts, promptsLoading: false });
+    } catch (error) {
+      appStore.update({
+        prompts: { userDir: '', projectDir: null, projectTrusted: false, templates: [] },
+        promptsLoading: false,
+        promptError: `提示模板加载失败：${String(error)}`,
+      });
+    }
+  }
+
+  async savePrompt(input: {
+    scope: 'user' | 'project';
+    name: string;
+    description?: string;
+    argumentHint?: string;
+    body: string;
+    originalPath?: string;
+  }): Promise<boolean> {
+    if (!isDesktop || appStore.getSnapshot().promptSaving) return false;
+    appStore.update({ promptSaving: true, promptError: '' });
+    try {
+      const prompts = await invoke<PiPromptCatalog>('save_pi_prompt', {
+        request: { ...input, projectPath: this.promptProjectPath() },
+      });
+      appStore.update({ prompts, promptSaving: false });
+      // Templates surface as `/name` in the composer, so refresh the menu too.
+      await this.loadSlashCommands();
+      notify('提示模板已保存', `/${input.name.trim().replace(/^\//, '')}`, 'success');
+      return true;
+    } catch (error) {
+      appStore.update({ promptSaving: false, promptError: `保存失败：${String(error)}` });
+      notify('提示模板保存失败', String(error), 'error');
+      return false;
+    }
+  }
+
+  async deletePrompt(path: string): Promise<void> {
+    if (!isDesktop || appStore.getSnapshot().promptSaving) return;
+    appStore.update({ promptSaving: true, promptError: '' });
+    try {
+      const prompts = await invoke<PiPromptCatalog>('delete_pi_prompt', { request: { path } });
+      appStore.update({ prompts, promptSaving: false });
+      await this.loadSlashCommands();
+      notify('提示模板已删除', basename(path), 'success');
+    } catch (error) {
+      appStore.update({ promptSaving: false, promptError: `删除失败：${String(error)}` });
+      notify('提示模板删除失败', String(error), 'error');
+    }
+  }
+
   respondToExtension(request: ExtensionUiRequest, response: Record<string, unknown>): void {
     const id = request.id || request.requestId;
     this.transport.send({ type: 'extension_ui_response', id, ...response });
@@ -1504,6 +1583,8 @@ export class PiStudioController {
         this.updateTool(event.toolCallId || '', {
           status: 'streaming',
           output: formatToolOutput(event.partialResult),
+          // Spread so a payload without details keeps the last snapshot we had.
+          ...detailsPatch(event.partialResult),
         });
         break;
       case 'tool_execution_end':
@@ -1511,6 +1592,7 @@ export class PiStudioController {
           status: event.isError ? 'error' : 'complete',
           output: formatToolOutput(event.result),
           isError: Boolean(event.isError),
+          ...detailsPatch(event.result),
         });
         break;
       case 'auto_compaction_start':

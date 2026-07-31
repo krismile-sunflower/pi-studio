@@ -14,6 +14,39 @@ export function basename(path: string): string {
   return String(path || '').split(/[/\\]/).filter(Boolean).pop() || '';
 }
 
+export const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'heic', 'heif']);
+
+export function extensionOf(value: string): string {
+  const name = basename((value || '').split(/[?#]/)[0] || '');
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/** Returns the plain filesystem path when `value` points at an image file, else null. */
+export function toImagePath(value: string): string | null {
+  let path = String(value || '').trim().replace(/^['"]|['"]$/g, '');
+  if (path.startsWith('file://')) {
+    try {
+      path = decodeURIComponent(new URL(path).pathname);
+    } catch {
+      return null;
+    }
+  }
+  if (!path.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(path)) return null;
+  return imageExtensions.has(extensionOf(path)) ? path : null;
+}
+
+/**
+ * Image paths carried by a clipboard/drag payload. Only reports paths when *every*
+ * line is one, so ordinary prose that mentions a `.png` still pastes as plain text.
+ */
+export function parseImagePaths(text: string): string[] {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const paths = lines.map(toImagePath).filter((path): path is string => Boolean(path));
+  return paths.length === lines.length ? paths : [];
+}
+
 export function normalizePath(path: string): string {
   return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }

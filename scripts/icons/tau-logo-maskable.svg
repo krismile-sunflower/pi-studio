@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">PiCode maskable application icon</title>
+  <desc id="desc">Full-bleed violet tile with the pi mark inside the maskable safe zone.</desc>
+  <defs>
+    <linearGradient id="tile" x1="40" y1="0" x2="472" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B96FF"/>
+      <stop offset="1" stop-color="#5A63D8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.05" r="0.9">
+      <stop stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Full bleed: the launcher supplies the shape, so no corner radius here. -->
+  <rect width="512" height="512" fill="url(#tile)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
+  <!-- Scaled to 0.88 so the mark stays inside the 80%-diameter safe circle even
+       under the most aggressive launcher crop. -->
+  <!-- Glyph geometry is shared with tau-logo.svg — change it there first,
+       then mirror the rects here. -->
+  <g fill="#FFFFFF" transform="translate(256 256) scale(0.88) translate(-256 -256)">
+    <rect x="118" y="121" width="276" height="56" rx="28"/>
+    <rect x="160" y="165" width="56" height="170" rx="28"/>
+    <rect x="296" y="165" width="56" height="170" rx="28"/>
+    <rect x="170" y="367" width="172" height="24" rx="12" fill-opacity="0.60"/>
+  </g>
+</svg>

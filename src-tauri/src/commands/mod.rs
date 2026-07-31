@@ -5,5 +5,6 @@ pub mod files;
 pub mod git;
 pub mod models;
 pub mod packages;
+pub mod prompts;
 pub mod sessions;
 pub mod sidecar;

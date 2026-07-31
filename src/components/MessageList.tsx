@@ -2,6 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ExtensionUiRequest, PlanSessionState, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
 import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
 import { formatTokens, totalContextTokens } from '../lib/utils';
+import {
+  applyToolOutcome,
+  formatDuration,
+  isSubagentTool,
+  parseSubagentRun,
+  subagentModeLabel,
+  subagentStatusLabel,
+  type SubagentChild,
+} from '../lib/subagents';
 import { Icon } from './Icon';
 import { CopyMessageButton, Markdown } from './Markdown';
 import { canExecutePlan } from '../app/plan-state';
@@ -240,6 +249,136 @@ function argumentPreview(args: Record<string, unknown>): string {
 
 function isTerminalToolName(name: string): boolean {
   return /(?:command|terminal|shell|powershell|bash|exec|run)/i.test(name);
+}
+
+function SubagentChildRow({ child }: { child: SubagentChild }) {
+  const [open, setOpen] = useState(false);
+  const metrics = [
+    child.model,
+    child.toolCount ? `${child.toolCount} 次工具` : '',
+    child.tokens ? `${formatTokens(child.tokens)} tokens` : '',
+    formatDuration(child.durationMs),
+  ].filter(Boolean);
+  const details = child.output || child.error || child.recentTools.length > 0;
+
+  return (
+    <div className={`subagent-child ${child.status}`}>
+      <div
+        className="subagent-child-head"
+        role={details ? 'button' : undefined}
+        tabIndex={details ? 0 : undefined}
+        onClick={() => details && setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (!details) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setOpen((value) => !value);
+          }
+        }}
+      >
+        <span className="subagent-child-dot" aria-hidden="true" />
+        <span className="subagent-child-agent">{child.agent}</span>
+        {child.phase ? <span className="subagent-child-phase">{child.phase}</span> : null}
+        <span className="subagent-child-status">{subagentStatusLabel(child.status)}</span>
+      </div>
+      {child.task ? <div className="subagent-child-task">{child.task}</div> : null}
+      {child.status === 'running' && child.currentTool ? (
+        <div className="subagent-child-live">
+          <span className="subagent-child-live-dot" aria-hidden="true" />
+          {child.currentTool}
+          {child.currentToolArgs ? <em>{child.currentToolArgs}</em> : null}
+        </div>
+      ) : null}
+      {metrics.length ? <div className="subagent-child-metrics">{metrics.join(' · ')}</div> : null}
+      {child.error ? <div className="subagent-child-error">{child.error}</div> : null}
+      {open ? (
+        <div className="subagent-child-body">
+          {child.recentTools.length ? (
+            <ul className="subagent-child-tools">
+              {child.recentTools.slice(-8).map((entry, index) => <li key={`${entry}-${index}`}>{entry}</li>)}
+            </ul>
+          ) : null}
+          {child.output ? <div className="subagent-child-output">{child.output}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SubagentCard({ tool }: { tool: ToolExecution }) {
+  const run = useMemo(
+    () => applyToolOutcome(parseSubagentRun(tool.args, tool.resultDetails, tool.toolName), tool.status),
+    [tool.args, tool.resultDetails, tool.toolName, tool.status],
+  );
+  const running = tool.status === 'pending' || tool.status === 'streaming';
+  const [expanded, setExpanded] = useState(true);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      setExpanded((event as CustomEvent<{ expanded: boolean }>).detail.expanded);
+    };
+    window.addEventListener('pi-studio:tool-expand', listener);
+    return () => window.removeEventListener('pi-studio:tool-expand', listener);
+  }, []);
+
+  const done = run.children.filter((child) => child.status === 'completed').length;
+  const failed = run.children.filter((child) => child.status === 'failed').length;
+  const summary = [
+    run.children.length ? `${done}/${run.children.length} 完成` : '',
+    failed ? `${failed} 失败` : '',
+    run.tokens ? `${formatTokens(run.tokens)} tokens` : '',
+    run.cost ? `$${run.cost.toFixed(4)}` : '',
+  ].filter(Boolean);
+
+  return (
+    <div className={`tool-card subagent-card${tool.history ? ' history' : ''}${running ? ' running' : ''}`} data-tool-call-id={tool.toolCallId}>
+      <div
+        className="tool-card-header"
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setExpanded((value) => !value);
+          }
+        }}
+      >
+        <span className="tool-header-left">
+          <span className={`tool-card-chevron${expanded ? ' expanded' : ''}`}>
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+              <path d="M2 1l4 3-4 3z" />
+            </svg>
+          </span>
+          <Icon name="brain" className="subagent-card-icon" width={13} height={13} />
+          <span className="tool-name">子代理</span>
+          <span className="subagent-mode">{subagentModeLabel(run)}</span>
+          {run.async ? <span className="subagent-flag">后台</span> : null}
+          {run.timedOut ? <span className="subagent-flag warn">超时</span> : null}
+          {run.stopped ? <span className="subagent-flag warn">已停止</span> : null}
+        </span>
+        <span className="tool-header-right">
+          {summary.length ? <span className="subagent-summary">{summary.join(' · ')}</span> : null}
+          <span className={`tool-status ${tool.status}`}>
+            {{ pending: '等待中', streaming: '执行中', complete: '已完成', error: '失败' }[tool.status]}
+          </span>
+        </span>
+      </div>
+      <div className={`tool-card-body${expanded ? ' expanded' : ''}`}>
+        {run.children.length ? (
+          <div className="subagent-children">
+            {run.children.map((child) => <SubagentChildRow key={`${child.index}-${child.agent}`} child={child} />)}
+          </div>
+        ) : null}
+        {!run.live && running ? <div className="subagent-note">正在启动子代理…</div> : null}
+        {run.asyncId ? <div className="subagent-note">后台运行 ID：<code>{run.asyncId}</code></div> : null}
+        {/* Show the raw result unless every child already carries its own output (live runs). */}
+        {tool.output && !run.children.some((child) => child.output) ? (
+          <div className="tool-output-wrapper"><div className="tool-output">{tool.output}</div></div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ToolCard({ tool }: { tool: ToolExecution }) {
@@ -699,7 +838,9 @@ export function MessageList({
               onElementRef={item.message.role === 'user' ? (node) => registerConversationNode(item.message.id, node) : undefined}
             />
           ) : (
-            <ToolCard key={item.id} tool={item.tool} />
+            isSubagentTool(item.tool.toolName)
+              ? <SubagentCard key={item.id} tool={item.tool} />
+              : <ToolCard key={item.id} tool={item.tool} />
           ),
         )}
         {plan.phase !== 'build' ? (
