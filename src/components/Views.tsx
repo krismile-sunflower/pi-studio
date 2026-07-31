@@ -15,6 +15,7 @@ import type {
 import { basename, formatRelativeTime } from '../lib/utils';
 import { applyTheme, getCurrentTheme, themes } from '../lib/theme';
 import { controller } from '../app/controller';
+import { notify } from '../app/controller-contracts';
 import { Icon } from './Icon';
 import { DEFAULT_REASONING_PROFILE, migrateReasoningConfig, PI_REASONING_LEVELS, REASONING_UI_LABELS } from '../lib/reasoning';
 
@@ -556,8 +557,19 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [newProviderName, setNewProviderName] = useState('');
   const [dirty, setDirty] = useState(false);
+  // Name of the card to bring into view once it has rendered; cleared after use
+  // so a later re-render never scrolls the pane again behind the user's back.
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const lastSynced = useRef(configSignature(snapshot.modelsConfig));
   const desktop = Boolean(window.tauDesktop.isTauri);
+  const trimmedNewProviderName = newProviderName.trim();
+
+  useEffect(() => {
+    if (!scrollTarget) return;
+    setScrollTarget(null);
+    const card = document.querySelector(`[data-provider-name="${CSS.escape(scrollTarget)}"]`);
+    card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [scrollTarget]);
 
   useEffect(() => {
     const nextSignature = configSignature(snapshot.modelsConfig);
@@ -636,11 +648,15 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
   };
 
   const addProvider = () => {
-    const name = newProviderName.trim();
+    const name = trimmedNewProviderName;
     if (!name) return;
     if (draft.providers?.[name]) {
+      // The list is sorted alphabetically, so the existing card is often off
+      // screen — without the toast + scroll this reads as "nothing happened".
+      notify('该供应商已存在', `已为你展开 ${name} 的配置。`, 'warning');
       setEditing(name);
       setNewProviderName('');
+      setScrollTarget(name);
       return;
     }
     setDirty(true);
@@ -653,6 +669,7 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
     }));
     setEditing(name);
     setNewProviderName('');
+    setScrollTarget(name);
   };
 
   const save = async () => {
@@ -751,7 +768,15 @@ function ModelsProvidersSection({ snapshot }: { snapshot: AppSnapshot }) {
               }
             }}
           />
-          <button className="settings-action-btn primary" type="button" onClick={addProvider}>添加供应商</button>
+          <button
+            className="settings-action-btn primary"
+            type="button"
+            onClick={addProvider}
+            disabled={!trimmedNewProviderName}
+            title={trimmedNewProviderName ? undefined : '请先在左侧输入供应商名称'}
+          >
+            添加供应商
+          </button>
         </div>
       </div>
 
@@ -872,7 +897,7 @@ function ProviderCard({
   };
 
   return (
-    <article className={`provider-card${expanded ? ' expanded' : ''}`}>
+    <article className={`provider-card${expanded ? ' expanded' : ''}`} data-provider-name={name}>
       <button className="provider-card-header" type="button" onClick={onToggle}>
         <span className="provider-card-mark" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
         <div className="provider-card-main">

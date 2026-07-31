@@ -3,7 +3,10 @@ node_modules/
 src-tauri/extensions/node_modules/
 
 # Frontend build output
-dist/
+# Keep the directory itself: tauri.conf.json declares `../dist` as a bundle
+# resource, and tauri-build validates that path on every cargo build (dev too).
+dist/*
+!dist/.gitkeep
 
 # Rust/Tauri build output
 target/
