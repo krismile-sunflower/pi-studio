@@ -1,9 +1,10 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   root: 'src',
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     // Vitest exercises the packaged extension's actual policy without adding
     // its Node-only source to the browser TypeScript program.

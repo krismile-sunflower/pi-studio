@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppSnapshot, PlanSessionState } from '../lib/types';
-import { FileSidebar } from './FileSidebar';
+import { FileSidebar, formatPreviewText } from './FileSidebar';
 
 const controllerMocks = vi.hoisted(() => ({
   commitGit: vi.fn(),
@@ -45,6 +45,24 @@ function snapshot(plan: PlanSessionState = reviewPlan): AppSnapshot {
     gitDiffLoading: false,
   } as unknown as AppSnapshot;
 }
+
+describe('file preview formatting', () => {
+  it('expands compact JSON for line-by-line preview', () => {
+    expect(formatPreviewText('{"name":"pi","nested":{"enabled":true}}', 'settings.json', 'json')).toBe([
+      '{',
+      '  "name": "pi",',
+      '  "nested": {',
+      '    "enabled": true',
+      '  }',
+      '}',
+    ].join('\n'));
+  });
+
+  it('keeps invalid or truncated JSON unchanged', () => {
+    expect(formatPreviewText('{"broken":', 'settings.json', 'json')).toBe('{"broken":');
+    expect(formatPreviewText('{"partial":true', 'large.json', 'json', true)).toBe('{"partial":true');
+  });
+});
 
 describe('FileSidebar plan editor', () => {
   afterEach(() => vi.clearAllMocks());

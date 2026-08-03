@@ -58,6 +58,17 @@ function formatSize(size?: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+export function formatPreviewText(content: string, name: string, language: string, truncated = false): string {
+  const isJson = language.toLowerCase() === 'json' || name.toLowerCase().endsWith('.json');
+  if (!isJson || truncated || !content.trim()) return content;
+
+  try {
+    return JSON.stringify(JSON.parse(content.replace(/^\uFEFF/, '')), null, 2);
+  } catch {
+    return content;
+  }
+}
+
 function fileIcon(item: FileItem): string {
   if (item.isDirectory) return '▸';
   const extension = item.name.split('.').pop()?.toLowerCase();
@@ -346,7 +357,10 @@ export function FileSidebar({ rootPath, open, snapshot, planRequest = 0, planTab
         );
       });
 
-  const previewLines = useMemo(() => preview?.kind === 'text' ? (preview.content || '').split('\n') : [], [preview]);
+  const previewLines = useMemo(() => {
+    if (preview?.kind !== 'text') return [];
+    return formatPreviewText(preview.content || '', preview.name, preview.language, preview.truncated).split(/\r\n?|\n/);
+  }, [preview]);
 
   return (
     <>
@@ -481,7 +495,9 @@ export function FileSidebar({ rootPath, open, snapshot, planRequest = 0, planTab
             <div className="file-preview-view">
               <div className="file-preview-shell">
                 <div className="file-preview-header">
-                  <button className="file-preview-back" type="button" onClick={() => setPreview(null)}>‹ 返回</button>
+                  <button className="file-preview-back" type="button" title="返回文件列表" aria-label="返回文件列表" onClick={() => setPreview(null)}>
+                    <Icon name="arrow-left" width={14} height={14} />
+                  </button>
                   <div className="file-preview-info"><strong className="file-preview-name">{preview.name}</strong><span className="file-preview-meta">{preview.language} · {formatSize(preview.size)}</span></div>
                   <div className="file-preview-actions">
                     <button className="file-preview-action insert" type="button" onClick={() => insert({ name: preview.name, path: preview.path, isDirectory: false })}>添加到消息</button>

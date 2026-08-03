@@ -1,0 +1,67 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "katex/dist/katex.min.css" layer(base);
+@import "./style.css" layer(components);
+@import "./workbench.css" layer(components);
+
+/* Keep the existing semantic palette as Tailwind theme values. This lets
+ * utility classes and the retained stateful component selectors share one
+ * source of truth while preserving both light and dark themes. */
+@theme inline {
+  --color-solid: var(--bg-solid);
+  --color-canvas: var(--bg-canvas);
+  --color-sidebar: var(--bg-sidebar);
+  --color-panel: var(--bg-panel);
+  --color-elevated: var(--bg-elevated);
+  --color-muted: var(--bg-muted);
+  --color-glass: var(--bg-glass);
+  --color-glass-hover: var(--bg-glass-hover);
+  --color-glass-active: var(--bg-glass-active);
+  --color-glass-strong: var(--bg-glass-strong);
+  --color-frosted: var(--bg-frosted);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-dim: var(--text-dim);
+  --color-ghost: var(--text-ghost);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-text: var(--accent-text);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-glow: var(--accent-glow);
+  --color-user-bubble: var(--user-bubble);
+  --color-user-bubble-text: var(--user-bubble-text);
+  --color-tool-accent: var(--tool-accent);
+  --color-tool-accent-text: var(--tool-accent-text);
+  --color-tool: var(--tool-bg);
+  --color-thinking-accent: var(--thinking-accent);
+  --color-thinking-accent-text: var(--thinking-accent-text);
+  --color-thinking: var(--thinking-bg);
+  --color-line: var(--border);
+  --color-line-hover: var(--border-hover);
+  --color-line-bright: var(--border-bright);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", ui-sans-serif, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-default: var(--radius);
+  --radius-lg: var(--radius-lg);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-inset: var(--shadow-inset);
+
+  --ease-workbench: var(--ease);
+  --ease-spring: var(--spring);
+}
+
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+@custom-variant app-dark (&:where([data-theme="dark"], [data-theme="dark"] *));
