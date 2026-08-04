@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 // Vite resolves this alias to the desktop extension; TypeScript only sees the
 // small browser-safe declaration in vite-env.d.ts.
-import { builtinPlanToolNames, isPlanToolAllowed, isSafePlanBash, parsePlanResponse } from '@picode-plan-permissions';
+import { applyPlanExecutionMarkers, builtinPlanToolNames, isPlanToolAllowed, isSafePlanBash, parsePlanResponse } from '@picode-plan-permissions';
 
 describe('plan-mode permissions', () => {
   it('allows a narrow, cross-platform read-only Bash set', () => {
@@ -61,5 +61,40 @@ describe('plan-mode permissions', () => {
       { name: 'write', sourceInfo: { source: 'builtin' } },
       { name: 'ls', sourceInfo: { source: 'sdk' } },
     ])).toEqual(['read', 'bash']);
+  });
+
+  it('pauses on blockers without regressing completed work or advancing later steps', () => {
+    const executing = {
+      phase: 'executing' as const,
+      goal: 'Ship the workflow',
+      steps: [
+        { id: 'one', title: 'Persist state', status: 'in_progress' as const },
+        { id: 'two', title: 'Render UI', status: 'pending' as const },
+        { id: 'three', title: 'Verify', status: 'complete' as const },
+      ],
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+
+    expect(applyPlanExecutionMarkers(executing, new Set([0]), new Set([1]))).toMatchObject({
+      phase: 'review',
+      steps: [
+        { status: 'complete' },
+        { status: 'blocked' },
+        { status: 'complete' },
+      ],
+    });
+    expect(applyPlanExecutionMarkers(executing, new Set([0]), new Set([0]))).toMatchObject({
+      phase: 'executing',
+      steps: [
+        { status: 'complete' },
+        { status: 'in_progress' },
+        { status: 'complete' },
+      ],
+    });
+    const lateBlocked = applyPlanExecutionMarkers({
+      ...executing,
+      steps: [{ ...executing.steps[0]!, status: 'complete' as const }, { ...executing.steps[1]!, status: 'in_progress' as const }, executing.steps[2]!],
+    }, new Set(), new Set([0]));
+    expect(lateBlocked.steps[0]).toMatchObject({ status: 'complete' });
   });
 });

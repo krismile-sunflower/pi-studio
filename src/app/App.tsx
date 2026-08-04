@@ -99,7 +99,6 @@ export function App() {
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
   const [editingMessage, setEditingMessage] = useState<{ entryId: string; text: string; images?: ImageAttachment[] } | null>(null);
-  const [planEditorRequest, setPlanEditorRequest] = useState(0);
   const [planTabRequest, setPlanTabRequest] = useState(0);
   const sidebarResizer = useRef<HTMLDivElement>(null);
   const fileResizer = useRef<HTMLDivElement>(null);
@@ -145,11 +144,10 @@ export function App() {
     });
   }, []);
 
-  const openPlanPanel = useCallback((editor = false) => {
+  const openPlanPanel = useCallback(() => {
     setFileOpen(true);
     localStorage.setItem('tau-file-sidebar', 'open');
-    if (editor) setPlanEditorRequest((value) => value + 1);
-    else setPlanTabRequest((value) => value + 1);
+    setPlanTabRequest((value) => value + 1);
   }, []);
 
   useEffect(() => {
@@ -158,7 +156,7 @@ export function App() {
     const key = `${snapshot.selectedSessionFile || 'active'}:${plan.updatedAt}`;
     if (lastAutoOpenedPlan.current === key) return;
     lastAutoOpenedPlan.current = key;
-    openPlanPanel(false);
+    openPlanPanel();
   }, [openPlanPanel, snapshot.plan, snapshot.selectedSessionFile]);
 
   useEffect(() => {
@@ -303,7 +301,6 @@ export function App() {
               <MessageList
                 timeline={snapshot.timeline}
                 streaming={snapshot.isStreaming}
-                plan={snapshot.plan}
                 switching={snapshot.sessionSwitching}
                 extensionUiRequest={snapshot.extensionUiRequest}
                 onDeleteMessage={(entryId) => controller.deleteSessionMessage(entryId)}
@@ -312,9 +309,6 @@ export function App() {
                   setEditingMessage({ entryId: message.sessionEntryId, text: message.content, images: message.images });
                 }}
                 onRespondToExtension={(request, response) => controller.respondToExtension(request, response)}
-                onEditPlan={() => openPlanPanel(true)}
-                onContinuePlan={() => void controller.revisePlan()}
-                onExecutePlan={() => void controller.executePlan()}
               />
               <Composer
                 snapshot={snapshot}
@@ -340,7 +334,6 @@ export function App() {
           rootPath={snapshot.workspace.path}
           open={fileOpen}
           snapshot={snapshot}
-          planRequest={planEditorRequest}
           planTabRequest={planTabRequest}
           onClose={() => {
             setFileOpen(false);

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { PlanSessionState, TimelineItem } from '../lib/types';
+import type { TimelineItem } from '../lib/types';
 import { MessageList } from './MessageList';
 
 describe('MessageList', () => {
@@ -182,42 +182,9 @@ describe('MessageList', () => {
     expect(screen.getByText('src/app/App.tsx')).toBeInTheDocument();
   });
 
-  it('renders a reviewable plan and disables its actions while streaming', () => {
-    const onEdit = vi.fn();
-    const onContinue = vi.fn();
-    const onExecute = vi.fn();
-    const plan: PlanSessionState = {
-      phase: 'review',
-      goal: 'Implement a session-scoped planning workflow',
-      steps: [
-        { id: 'state', title: 'Persist the state', detail: 'Use a Pi custom entry.', status: 'pending' },
-        { id: 'ui', title: 'Render the review card', status: 'pending' },
-      ],
-      updatedAt: '2026-07-30T13:00:00.000Z',
-    };
-
-    const { rerender } = render(
-      <MessageList
-        timeline={[]}
-        streaming={false}
-        plan={plan}
-        onEditPlan={onEdit}
-        onContinuePlan={onContinue}
-        onExecutePlan={onExecute}
-      />,
-    );
-
-    expect(screen.getByRole('region', { name: '计划审阅' })).toHaveTextContent('Implement a session-scoped planning workflow');
-    fireEvent.click(screen.getByRole('button', { name: '编辑计划' }));
-    fireEvent.click(screen.getByRole('button', { name: '继续规划' }));
-    fireEvent.click(screen.getByRole('button', { name: /开始执行/ }));
-    expect(onEdit).toHaveBeenCalledOnce();
-    expect(onContinue).toHaveBeenCalledOnce();
-    expect(onExecute).toHaveBeenCalledOnce();
-
-    rerender(<MessageList timeline={[]} streaming plan={plan} />);
-    expect(screen.getByRole('button', { name: '编辑计划' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /开始执行/ })).toBeDisabled();
+  it('does not append a duplicate plan card to the chat', () => {
+    render(<MessageList timeline={[]} streaming={false} />);
+    expect(screen.queryByRole('region', { name: '计划审阅' })).not.toBeInTheDocument();
   });
 
   it('renders a subagent delegation as a child-progress card', () => {

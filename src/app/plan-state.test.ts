@@ -3,7 +3,9 @@ import type { PlanSessionState, SessionEntry } from '../lib/types';
 import {
   applyPlanControlMarkers,
   canExecutePlan,
+  formatPlanSteps,
   normalizePlanSessionState,
+  parsePlanSteps,
   planDraftPhase,
   planStateFromEntries,
   stripPlanControlMarkers,
@@ -52,6 +54,21 @@ describe('plan session state', () => {
     expect(planDraftPhase([{ title: 'Review the state model' }])).toBe('review');
   });
 
+  it('round-trips a numbered plan document into pending execution steps', () => {
+    const document = formatPlanSteps(reviewPlan.steps);
+    expect(document).toBe('1. Persist plan state\n\n2. Render review UI\n   Keep it session scoped.');
+    expect(parsePlanSteps('1、梳理范围\n   明确约束。\n2) 实施改动\n   覆盖测试。', reviewPlan.steps)).toEqual([
+      { id: 'one', title: '梳理范围', detail: '明确约束。', status: 'pending' },
+      { id: 'two', title: '实施改动', detail: '覆盖测试。', status: 'pending' },
+    ]);
+  });
+
+  it('ignores unnumbered and empty plan entries', () => {
+    expect(parsePlanSteps('说明文字\n\n1. 保留这一项\n\n2.   ')).toEqual([
+      { id: 'step-1', title: '保留这一项', status: 'pending' },
+    ]);
+  });
+
   it('marks finished steps from agent control markers and advances progress', () => {
     const executing: PlanSessionState = { ...reviewPlan, phase: 'executing' };
     const progress = applyPlanControlMarkers(executing, 'Implemented persistence. [DONE:1]');
@@ -82,6 +99,22 @@ describe('plan session state', () => {
     expect(blocked.phase).toBe('review');
     expect(blocked.steps.map((step) => step.status)).toEqual(['blocked', 'pending']);
     expect(canExecutePlan(blocked)).toBe(false);
+  });
+
+  it('lets completion win over blockers and never advances past a blocked step', () => {
+    const executing: PlanSessionState = {
+      ...reviewPlan,
+      phase: 'executing',
+      steps: [{ ...reviewPlan.steps[0]!, status: 'in_progress' }, reviewPlan.steps[1]!],
+    };
+
+    const blocked = applyPlanControlMarkers(executing, '[DONE:1] [BLOCKED:2]');
+    expect(blocked.phase).toBe('review');
+    expect(blocked.steps.map((step) => step.status)).toEqual(['complete', 'blocked']);
+
+    const completed = applyPlanControlMarkers(executing, '[DONE:1] [BLOCKED:1]');
+    expect(completed.phase).toBe('executing');
+    expect(completed.steps.map((step) => step.status)).toEqual(['complete', 'in_progress']);
   });
 
   it('ignores out-of-range control markers', () => {

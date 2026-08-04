@@ -2181,63 +2181,26 @@ div.project-header:hover { background: transparent; @apply text-secondary; }
 .composer-mode-switch button.active { background: var(--accent-subtle); @apply text-accent-text; box-shadow: var(--shadow-inset); }
 .composer-mode-switch button:first-child.active { background: color-mix(in srgb, var(--warning) 16%, var(--bg-elevated)); color: color-mix(in srgb, var(--warning) 86%, var(--text-primary)); }
 .composer-mode-switch button:focus-visible,
-.plan-review-actions button:focus-visible,
 .task-plan-actions button:focus-visible,
 .task-plan-editor button:focus-visible,
 .file-sidebar-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.plan-review-card {
-  width: min(100%, var(--content-max-width));
-  margin: 2px auto 18px;
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg-panel) 94%, var(--warning) 6%);
-  box-shadow: var(--shadow-sm), var(--shadow-inset);
-}
-.plan-review-card.phase-executing { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--bg-panel) 95%, var(--accent) 5%); }
-.plan-review-card.phase-complete { border-color: color-mix(in srgb, var(--success) 34%, var(--border)); background: color-mix(in srgb, var(--bg-panel) 96%, var(--success) 4%); }
-.plan-review-card-head { @apply flex; @apply items-start; @apply justify-between; gap: 14px; }
-.plan-review-kicker { @apply block; margin-bottom: 5px; @apply text-warning; font: 700 12px/1.1 "Cascadia Mono", Consolas, monospace; letter-spacing: .1em; }
-.plan-review-card h2 { @apply m-0; @apply text-primary; font-size: 17px; font-weight: 720; letter-spacing: -.02em; }
-.plan-phase-badge { @apply inline-flex; @apply flex-none; @apply items-center; gap: 6px; min-height: 25px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border)); border-radius: var(--radius-pill); @apply text-warning; font-size: 12px; font-weight: 650; }
-.plan-phase-badge.executing { border-color: color-mix(in srgb, var(--accent) 36%, var(--border)); @apply text-accent-text; }
-.plan-phase-badge.complete { border-color: color-mix(in srgb, var(--success) 36%, var(--border)); @apply text-success; }
-.plan-phase-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.plan-phase-badge.executing .plan-phase-dot { animation: workbenchPulse 1.2s ease-in-out infinite; }
-.plan-review-goal { max-width: 62ch; margin: 13px 0 15px; @apply text-secondary; font-size: 13px; line-height: 1.65; }
-.plan-review-goal.muted { @apply text-dim; }
-.plan-review-steps { @apply grid; gap: 6px; @apply m-0; @apply p-0; @apply list-none; }
-.plan-review-step { @apply grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg-elevated) 72%, transparent); }
-.plan-step-index { @apply grid; width: 23px; height: 23px; @apply place-items-center; border: 1px solid var(--text-ghost); border-radius: 50%; @apply text-dim; font: 650 12px/1 "Cascadia Mono", Consolas, monospace; }
-.plan-review-step > span:nth-child(2) { @apply grid; @apply min-w-0; gap: 3px; }
-.plan-review-step strong { @apply text-primary; font-size: 13px; font-weight: 650; line-height: 1.45; }
-.plan-review-step small { @apply text-dim; font-size: 12px; line-height: 1.45; }
-.plan-review-step em { padding-top: 3px; @apply text-dim; font-size: 12px; @apply not-italic; @apply whitespace-nowrap; }
-.plan-review-step.in_progress { border-color: color-mix(in srgb, var(--accent) 36%, var(--border)); }
-.plan-review-step.in_progress .plan-step-index { @apply border-accent; @apply text-accent-text; }
-.plan-review-step.complete .plan-step-index { @apply border-success; background: var(--success); color: var(--bg-solid); }
-.plan-review-step.complete strong { @apply text-dim; @apply line-through; }
-.plan-review-step.complete em { @apply text-success; }
-.plan-review-step.blocked { border-color: color-mix(in srgb, var(--error) 36%, var(--border)); }
-.plan-review-step.blocked .plan-step-index, .plan-review-step.blocked em { @apply text-error; @apply border-error; }
-.plan-review-empty { padding: 12px; border: 1px dashed color-mix(in srgb, var(--warning) 30%, var(--border)); border-radius: 8px; @apply text-dim; font-size: 12px; line-height: 1.55; }
-.plan-review-footer { @apply flex; @apply items-center; @apply justify-between; gap: 12px; margin-top: 14px; @apply text-dim; font-size: 12px; }
-.plan-review-actions { @apply flex; @apply flex-wrap; @apply justify-end; gap: 7px; }
-.plan-review-actions button, .task-plan-actions button, .task-plan-editor button { min-height: 30px; padding: 0 9px; border: 1px solid var(--border-hover); border-radius: 7px; background: transparent; @apply text-secondary; font-size: 12px; font-weight: 620; @apply cursor-pointer; transition: background var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast), transform var(--duration-fast); }
-.plan-review-actions button:hover:not(:disabled), .task-plan-actions button:hover:not(:disabled), .task-plan-editor button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: var(--bg-glass-hover); @apply text-primary; }
-.plan-review-actions button:active:not(:disabled), .task-plan-actions button:active:not(:disabled), .task-plan-editor button:active:not(:disabled) { transform: scale(.98); }
-.plan-review-actions button:disabled, .task-plan-actions button:disabled, .task-plan-editor button:disabled { @apply cursor-not-allowed; opacity: .42; }
-.plan-review-actions .plan-start-button, .task-plan-actions .task-plan-execute, .task-plan-editor-footer > button { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: var(--accent-strong); @apply text-white; }
-.plan-review-actions .plan-start-button:hover:not(:disabled), .task-plan-actions .task-plan-execute:hover:not(:disabled), .task-plan-editor-footer > button:hover:not(:disabled) { background: var(--accent-hover); @apply text-white; }
+.task-plan-actions button, .task-plan-editor button { min-height: 30px; padding: 0 9px; border: 1px solid var(--border-hover); border-radius: 7px; background: transparent; @apply text-secondary; font-size: 12px; font-weight: 620; @apply cursor-pointer; transition: background var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast), transform var(--duration-fast); }
+.task-plan-actions button:hover:not(:disabled), .task-plan-editor button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: var(--bg-glass-hover); @apply text-primary; }
+.task-plan-actions button:active:not(:disabled), .task-plan-editor button:active:not(:disabled) { transform: scale(.98); }
+.task-plan-actions button:disabled, .task-plan-editor button:disabled { @apply cursor-not-allowed; opacity: .42; }
+.task-plan-actions .task-plan-execute { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: var(--accent-strong); @apply text-white; }
+.task-plan-actions .task-plan-execute:hover:not(:disabled) { background: var(--accent-hover); @apply text-white; }
 
 .file-task-view { padding: 13px 11px 24px; }
 .task-state-row, .task-section-label, .task-request, .task-next-step, .task-metrics span, .task-plan-heading > span:last-child { font-size: 12px; }
 .task-state-row.plan-state-plan, .task-state-row.plan-state-review { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); color: color-mix(in srgb, var(--warning) 82%, var(--text-primary)); }
 .task-state-row.plan-state-executing { border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
+.task-state-row.plan-state-complete { border-color: color-mix(in srgb, var(--success) 34%, var(--border)); @apply text-success; }
+.task-state-row.task-surface-blocked-review { border-color: color-mix(in srgb, var(--error) 42%, var(--border)); @apply text-error; }
 .task-plan-heading > span:last-child { @apply tabular-nums; }
-.task-plan-list { gap: 6px; }
-.task-plan-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; padding: 8px; border-radius: 7px; }
+.task-plan-list { gap: 6px; @apply m-0; @apply p-0; @apply list-none; }
+.task-plan-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; padding: 8px; border-radius: 7px; @apply list-none; }
 .task-plan-status { width: 21px; height: 21px; border-radius: 50%; font: 650 12px/1 "Cascadia Mono", Consolas, monospace; @apply cursor-default; }
 .task-plan-copy { @apply grid; @apply min-w-0; gap: 3px; }
 .task-plan-copy small { @apply overflow-hidden; @apply text-dim; font-size: 12px; line-height: 1.35; @apply text-ellipsis; @apply whitespace-nowrap; }
@@ -2252,27 +2215,47 @@ div.project-header:hover { background: transparent; @apply text-secondary; }
 .task-plan-editor input { min-height: 30px; padding: 5px 8px; }
 .task-plan-editor textarea:focus, .task-plan-editor input:focus { @apply border-accent; box-shadow: 0 0 0 2px var(--accent-subtle); }
 .task-plan-editor textarea:disabled, .task-plan-editor input:disabled { opacity: .62; @apply cursor-not-allowed; }
-.task-plan-editor-heading, .task-plan-editor-footer { @apply flex; @apply items-center; @apply justify-between; gap: 8px; @apply text-secondary; font-size: 12px; font-weight: 650; }
-.task-plan-editor-heading button { min-height: 26px; }
-.task-plan-editor-step { @apply grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 7px; }
-.task-plan-editor-step > span { padding-top: 7px; @apply text-dim; font: 12px/1 "Cascadia Mono", Consolas, monospace; }
-.task-plan-editor-step > div:nth-child(2) { @apply grid; gap: 5px; }
-.task-plan-editor-step textarea { min-height: 43px; }
-.task-plan-editor-step-actions { @apply grid; grid-template-columns: repeat(3, 24px); gap: 2px; }
-.task-plan-editor-step-actions button { min-height: 24px; @apply p-0; }
-.task-plan-editor-footer { @apply items-end; font-weight: 400; line-height: 1.4; }
-.task-plan-editor-footer span { max-width: 22ch; @apply text-dim; font-size: 12px; }
+.task-plan-editor-document textarea { min-height: 220px; font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace; }
+.task-plan-editor-footer { @apply flex; @apply min-w-0; @apply items-center; @apply justify-between; gap: 10px; }
+.task-plan-editor-footer > span { @apply min-w-0; @apply text-dim; font-size: 11px; line-height: 1.45; }
+.task-plan-editor-footer > button { @apply flex-none; }
 .task-plan-empty { font-size: 12px; }
+.task-plan-blocked { @apply grid; @apply min-w-0; gap: 7px; margin-top: 10px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--error) 38%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--error) 7%, var(--bg-panel)); }
+.task-plan-blocked > span { @apply text-error; font-size: 12px; font-weight: 700; }
+.task-plan-blocked > div { @apply grid; gap: 5px; }
+.task-plan-blocked p { @apply grid; @apply m-0; gap: 2px; @apply text-secondary; font-size: 12px; line-height: 1.4; }
+.task-plan-blocked p strong { @apply text-primary; font-weight: 650; }
+.task-plan-blocked p small { @apply text-dim; font-size: 11px; }
+.task-progress { display: block; width: 100%; height: 6px; margin-top: 2px; overflow: hidden; border: 0; border-radius: 999px; background: var(--bg-muted); color: var(--accent-strong); }
+.task-progress::-webkit-progress-bar { background: var(--bg-muted); }
+.task-progress::-webkit-progress-value { background: var(--accent-strong); border-radius: inherit; }
+.task-progress::-moz-progress-bar { background: var(--accent-strong); border-radius: inherit; }
+.task-current-step { @apply grid; @apply min-w-0; gap: 6px; margin-top: 12px; padding: 11px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
+.task-current-step > div { @apply flex; @apply min-w-0; @apply items-center; @apply justify-between; gap: 8px; }
+.task-current-step > div > span { @apply text-accent-text; font-size: 11px; font-weight: 700; }
+.task-current-step > div small { @apply flex-none; @apply text-dim; font: 11px/1 "Cascadia Mono", "SFMono-Regular", Consolas, monospace; @apply tabular-nums; }
+.task-current-step strong { @apply text-primary; font-size: 14px; font-weight: 650; line-height: 1.45; text-wrap: pretty; }
+.task-current-step p { @apply m-0; @apply text-secondary; font-size: 12px; line-height: 1.55; text-wrap: pretty; }
+.task-plan-details { @apply min-w-0; margin-top: 14px; border-top: 1px solid var(--border); }
+.task-plan-details summary { @apply flex; @apply min-w-0; @apply items-center; gap: 7px; min-height: 38px; @apply cursor-pointer; @apply text-secondary; font-size: 12px; font-weight: 650; list-style: none; }
+.task-plan-details summary::-webkit-details-marker { display: none; }
+.task-plan-details summary > span { @apply min-w-0; @apply flex-1; }
+.task-plan-details summary > small { @apply flex-none; @apply text-dim; font-size: 11px; }
+.task-plan-details summary:hover { @apply text-primary; }
+.task-plan-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-plan-details-icon { @apply flex-none; @apply text-dim; transform: rotate(0deg); transition: transform var(--duration-fast) var(--ease); }
+.task-plan-details[open] .task-plan-details-icon { transform: rotate(90deg); }
+.task-plan-details > .task-plan-list { margin-bottom: 4px; }
+.task-details-content { @apply grid; gap: 16px; padding-bottom: 6px; }
+.task-details-content .task-section-label { margin-bottom: 7px; }
+.task-plan-document { @apply m-0; @apply min-w-0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-muted); @apply text-secondary; font: 12px/1.55 "Cascadia Mono", "SFMono-Regular", Consolas, monospace; @apply whitespace-pre-wrap; overflow-wrap: anywhere; }
+.task-result-summary .task-request { -webkit-line-clamp: initial; }
 
 @media (max-width: 720px) {
   .composer-mode-switch button { min-height: 27px; padding: 0 7px; }
-  .plan-review-card { margin-bottom: 12px; padding: 14px; }
-  .plan-review-card-head { @apply items-center; }
-  .plan-review-card h2 { font-size: 16px; }
-  .plan-review-footer { @apply items-start; @apply flex-col; }
-  .plan-review-actions { @apply w-full; justify-content: stretch; }
-  .plan-review-actions button { @apply flex-auto; }
-  .plan-review-actions .plan-start-button { flex-basis: 100%; }
+  .task-plan-editor-footer { @apply items-start; @apply flex-col; }
+  .task-plan-editor-footer > button { align-self: flex-end; }
+  .task-current-step { padding: 10px; }
 }
 
 /* Signal workspace: quiet surfaces, intentional hierarchy, and a useful command deck. */

@@ -17,4 +17,9 @@ declare module '@picode-plan-permissions' {
   export function isPlanToolAllowed(toolName: unknown, input: unknown): boolean;
   export function builtinPlanToolNames(tools: readonly unknown[]): string[];
   export function parsePlanResponse(text: string, existing: PlanSessionState): PlanStep[];
+  export function applyPlanExecutionMarkers(
+    state: PlanSessionState,
+    completed: ReadonlySet<number>,
+    blocked: ReadonlySet<number>,
+  ): PlanSessionState;
 }

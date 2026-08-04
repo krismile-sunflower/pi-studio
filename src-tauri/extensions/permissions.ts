@@ -251,6 +251,36 @@ function blockedMarkers(text: string): Set<number> {
   return blocked;
 }
 
+/**
+ * Keep the persisted extension state aligned with the browser's optimistic
+ * plan state: completion wins, completed work never regresses, and a blocker
+ * pauses the plan instead of starting a later step.
+ */
+export function applyPlanExecutionMarkers(
+  state: PlanSessionState,
+  completed: ReadonlySet<number>,
+  blocked: ReadonlySet<number>,
+): PlanSessionState {
+  if (state.phase !== 'executing') return state;
+
+  const steps = state.steps.map((step, index) => {
+    if (completed.has(index)) return { ...step, status: 'complete' as const };
+    if (blocked.has(index) && step.status !== 'complete') return { ...step, status: 'blocked' as const };
+    return step;
+  });
+  const hasBlocked = steps.some((step) => step.status === 'blocked');
+  if (!hasBlocked && !steps.some((step) => step.status === 'in_progress')) {
+    const nextPending = steps.findIndex((step) => step.status === 'pending');
+    if (nextPending >= 0) steps[nextPending] = { ...steps[nextPending]!, status: 'in_progress' };
+  }
+  const phase: PlanPhase = steps.length > 0 && steps.every((step) => step.status === 'complete')
+    ? 'complete'
+    : hasBlocked
+      ? 'review'
+      : 'executing';
+  return { ...state, phase, steps };
+}
+
 function assistantText(message: unknown): string {
   if (!message || typeof message !== 'object') return '';
   const content = (message as { content?: unknown }).content;
@@ -420,21 +450,8 @@ Implement the plan in order. After a completed step, include [DONE:n] in your no
     const completed = doneMarkers(text);
     const blocked = blockedMarkers(text);
     if (!completed.size && !blocked.size) return;
-    const steps = state.steps.map((step, index) => {
-      if (completed.has(index)) return { ...step, status: 'complete' as const };
-      if (blocked.has(index)) return { ...step, status: 'blocked' as const };
-      return step;
-    });
-    const nextPending = steps.findIndex((step) => step.status === 'pending');
-    if (nextPending >= 0 && !steps.some((step) => step.status === 'in_progress')) {
-      steps[nextPending] = { ...steps[nextPending]!, status: 'in_progress' };
-    }
-    const phase: PlanPhase = steps.every((step) => step.status === 'complete')
-      ? 'complete'
-      : steps.some((step) => step.status === 'blocked')
-        ? 'review'
-        : 'executing';
-    setPlanPhase(phase, { steps });
+    const next = applyPlanExecutionMarkers(state, completed, blocked);
+    setPlanPhase(next.phase, { steps: next.steps });
   });
 
   pi.on('tool_call', async (event, ctx) => {

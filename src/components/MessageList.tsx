@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ExtensionUiRequest, PlanSessionState, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
+import type { ExtensionUiRequest, RenderedMessage, TimelineItem, ToolExecution, Usage } from '../lib/types';
 import { isPermissionRequest, permissionRequestDetails } from '../lib/extension-ui';
 import { formatTokens, totalContextTokens } from '../lib/utils';
 import {
@@ -13,14 +13,6 @@ import {
 } from '../lib/subagents';
 import { Icon } from './Icon';
 import { CopyMessageButton, Markdown } from './Markdown';
-import { canExecutePlan } from '../app/plan-state';
-
-const emptyPlan: PlanSessionState = {
-  phase: 'build',
-  goal: '',
-  steps: [],
-  updatedAt: new Date(0).toISOString(),
-};
 
 function usageText(usage?: Usage): string {
   if (!usage) return '';
@@ -569,100 +561,22 @@ function conversationPreview(message: RenderedMessage): string {
   return preview.length > 56 ? `${preview.slice(0, 56)}…` : preview || '空白用户消息';
 }
 
-function planPhaseLabel(phase: PlanSessionState['phase']): string {
-  return {
-    build: '构建模式',
-    plan: '正在规划',
-    review: '等待确认',
-    executing: '正在执行',
-    complete: '计划完成',
-  }[phase];
-}
-
-function PlanReviewCard({
-  plan,
-  streaming,
-  onEdit,
-  onContinue,
-  onExecute,
-}: {
-  plan: PlanSessionState;
-  streaming: boolean;
-  onEdit?(): void;
-  onContinue?(): void;
-  onExecute?(): void;
-}) {
-  const complete = plan.steps.filter((step) => step.status === 'complete').length;
-  const reviewable = plan.phase === 'plan' || plan.phase === 'review';
-  return (
-    <section className={`plan-review-card phase-${plan.phase}`} aria-label="计划审阅">
-      <div className="plan-review-card-head">
-        <div>
-          <span className="plan-review-kicker">PLAN / {plan.phase.toUpperCase()}</span>
-          <h2>{plan.phase === 'review' ? '请审阅这份计划' : planPhaseLabel(plan.phase)}</h2>
-        </div>
-        <span className={`plan-phase-badge ${plan.phase}`}>
-          <span aria-hidden="true" className="plan-phase-dot" />
-          {plan.phase === 'plan' || plan.phase === 'review' ? '只读' : planPhaseLabel(plan.phase)}
-        </span>
-      </div>
-      <p className={`plan-review-goal${plan.goal ? '' : ' muted'}`}>
-        {plan.goal || '正在等待 Agent 根据你的需求整理目标与步骤。'}
-      </p>
-      {plan.steps.length ? (
-        <ol className="plan-review-steps">
-          {plan.steps.map((step, index) => (
-            <li className={`plan-review-step ${step.status}`} key={step.id}>
-              <span className="plan-step-index">{step.status === 'complete' ? <Icon name="check" width={12} /> : index + 1}</span>
-              <span>
-                <strong>{step.title}</strong>
-                {step.detail ? <small>{step.detail}</small> : null}
-              </span>
-              <em>{step.status === 'in_progress' ? '进行中' : step.status === 'complete' ? '完成' : step.status === 'blocked' ? '受阻' : '待办'}</em>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <div className="plan-review-empty">Agent 将在回复中生成带有步骤的 Plan，再由你确认是否执行。</div>
-      )}
-      <div className="plan-review-footer">
-        <span>{plan.steps.length ? `${complete} / ${plan.steps.length} 个步骤已完成` : '尚未生成有效步骤'}</span>
-        {reviewable ? (
-          <div className="plan-review-actions">
-            <button type="button" disabled={streaming} onClick={onEdit}>编辑计划</button>
-            <button type="button" disabled={streaming} onClick={onContinue}>继续规划</button>
-            <button className="plan-start-button" type="button" disabled={streaming || !canExecutePlan(plan)} onClick={onExecute}>开始执行 <span aria-hidden="true">→</span></button>
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
 export function MessageList({
   timeline,
   streaming,
-  plan = emptyPlan,
   switching = false,
   extensionUiRequest,
   onDeleteMessage,
   onEditMessage,
   onRespondToExtension,
-  onEditPlan,
-  onContinuePlan,
-  onExecutePlan,
 }: {
   timeline: TimelineItem[];
   streaming: boolean;
-  plan?: PlanSessionState;
   switching?: boolean;
   extensionUiRequest?: ExtensionUiRequest | null;
   onDeleteMessage?(entryId: string): Promise<boolean>;
   onEditMessage?(message: RenderedMessage): void;
   onRespondToExtension?(request: ExtensionUiRequest, response: Record<string, unknown>): void;
-  onEditPlan?(): void;
-  onContinuePlan?(): void;
-  onExecutePlan?(): void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const conversationNodes = useRef(new Map<string, HTMLDivElement>());
@@ -843,15 +757,6 @@ export function MessageList({
               : <ToolCard key={item.id} tool={item.tool} />
           ),
         )}
-        {plan.phase !== 'build' ? (
-          <PlanReviewCard
-            plan={plan}
-            streaming={streaming}
-            onEdit={onEditPlan}
-            onContinue={onContinuePlan}
-            onExecute={onExecutePlan}
-          />
-        ) : null}
         {permissionRequest && onRespondToExtension ? (
           <PermissionRequestCard request={permissionRequest} onRespond={onRespondToExtension} />
         ) : null}

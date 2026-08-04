@@ -31,6 +31,53 @@ export function canExecutePlan(plan: PlanSessionState | null | undefined): boole
   );
 }
 
+/** Turns the persisted step list into the single editable plan document shown in the sidebar. */
+export function formatPlanSteps(steps: readonly Pick<PlanStep, 'title' | 'detail'>[]): string {
+  return steps
+    .filter((step) => step.title.trim())
+    .map((step, index) => {
+      const lines = [`${index + 1}. ${step.title.trim()}`];
+      const detail = step.detail?.trim();
+      if (detail) {
+        lines.push(...detail.split(/\r\n?|\n/).map((line) => `   ${line.trim()}`));
+      }
+      return lines.join('\n');
+    })
+    .join('\n\n');
+}
+
+/** Parses the sidebar's numbered plan document back into the execution step list. */
+export function parsePlanSteps(value: string, existingSteps: readonly Pick<PlanStep, 'id'>[] = []): PlanStep[] {
+  const parsed: Array<{ title: string; detailLines: string[] }> = [];
+  let current: { title: string; detailLines: string[] } | null = null;
+
+  for (const line of value.replace(/\r/g, '').split('\n')) {
+    const match = line.match(/^(?:\d+)\s*[.)、]\s*(.*?)\s*$/);
+    if (match) {
+      const title = match[1]?.trim() || '';
+      if (!title) {
+        current = null;
+        continue;
+      }
+      current = { title, detailLines: [] };
+      parsed.push(current);
+      continue;
+    }
+
+    if (current && line.trim()) current.detailLines.push(line.trim());
+  }
+
+  return parsed.map((step, index) => {
+    const detail = step.detailLines.join('\n').trim();
+    return {
+      id: existingSteps[index]?.id || `step-${index + 1}`,
+      title: step.title,
+      ...(detail ? { detail } : {}),
+      status: 'pending',
+    };
+  });
+}
+
 function normalizeStep(value: unknown, index: number): PlanStep | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Partial<PlanStep>;
